@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>jev8ball // neural oracle</title>
+  <meta name="description" content="A minimalist Magic 8-Ball powered by TypeSafe Jev structured decision intelligence on OpenRouter.">
+  <meta name="theme-color" content="#0b0b0b">
+
+  <!-- Monospace Font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <!-- Ambient floating particles like katdrop -->
+  <canvas id="particles"></canvas>
+
+  <main class="container">
+    <!-- Header -->
+    <header class="header">
+      <div class="top-nav">
+        <span class="brand-tag">oracle.sys</span>
+        <button id="soundToggle" class="btn-ghost" title="Toggle audio feedback">sound: on</button>
+      </div>
+      <h1>jev8ball</h1>
+      <div class="subtitle-row">
+        <span class="subtitle">// type-safe neural decision oracle</span>
+        <span class="status-sep">•</span>
+        <div id="backendStatus" class="backend-status" title="Click to test model latency">
+          <span class="status-dot"></span>
+          <span id="statusText" class="status-text">typesafe/jev-1.13</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- 8-Ball Interactive Stage -->
+    <section class="ball-stage">
+      <div class="ball-wrapper" id="ballWrapper" title="Click to shake the oracle">
+        <div class="ball-sphere" id="ballSphere">
+          <!-- Fluid window / Viewport -->
+          <div class="fluid-window">
+            <div class="fluid-ambient"></div>
+            <!-- Floating Icosahedron Triangle Die -->
+            <div class="floating-die" id="floatingDie">
+              <svg class="die-svg" viewBox="0 0 160 160">
+                <!-- Triangle body -->
+                <polygon points="80,18 145,134 15,134" class="die-face" />
+                <polygon points="80,24 140,130 20,130" class="die-inner" />
+              </svg>
+              <div class="die-text-wrap">
+                <span class="die-text" id="dieText">CONCENTRATE<br>& ASK</span>
+              </div>
+            </div>
+            <!-- Fluid bubbles / ripples -->
+            <div class="fluid-ripple" id="fluidRipple"></div>
+          </div>
+        </div>
+        <!-- Floor Shadow -->
+        <div class="ball-shadow"></div>
+      </div>
+    </section>
+
+    <!-- Input Form -->
+    <section class="prompt-section">
+      <form id="askForm" class="prompt-form">
+        <div class="prompt-input-wrap">
+          <span class="prompt-symbol">&gt;</span>
+          <input
+            type="text"
+            id="questionInput"
+            class="prompt-input"
+            placeholder="ask the oracle a yes/no question..."
+            maxlength="200"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button type="submit" id="submitBtn" class="btn btn-ask">
+            <span id="btnText">consult</span>
+            <span class="spinner" id="btnSpinner"></span>
+          </button>
+        </div>
+      </form>
+
+      <!-- Quick Suggestion Pills -->
+      <div class="quick-prompts">
+        <span class="quick-label">suggest:</span>
+        <button class="quick-pill" data-q="Will this code deploy cleanly to production?">deploy cleanly?</button>
+        <button class="quick-pill" data-q="Should I rewrite the stack in Rust?">rewrite in rust?</button>
+        <button class="quick-pill" data-q="Is tomorrow going to be a productive day?">productive day?</button>
+        <button class="quick-pill" data-q="Will my current venture succeed?">venture success?</button>
+      </div>
+    </section>
+
+    <!-- Telemetry & Decision Details -->
+    <section class="telemetry-card" id="telemetryCard">
+      <div class="telemetry-header">
+        <span class="telemetry-title">// JEV DECISION TELEMETRY</span>
+        <span class="telemetry-badge" id="telemetryBadge">IDLE</span>
+      </div>
+
+      <div class="telemetry-body">
+        <div class="telemetry-row">
+          <span class="t-label">VERDICT:</span>
+          <span class="t-val" id="tVerdict">—</span>
+        </div>
+        <div class="telemetry-row">
+          <span class="t-label">P(FAVORABLE):</span>
+          <span class="t-val mono" id="tNoul">—</span>
+        </div>
+        <div class="telemetry-meter-bar">
+          <div class="meter-fill" id="noulFill"></div>
+        </div>
+
+        <div class="telemetry-grid">
+          <div class="t-cell">
+            <span class="t-cell-label">CONFIDENCE</span>
+            <span class="t-cell-val" id="tConfidence">—</span>
+          </div>
+          <div class="t-cell">
+            <span class="t-cell-label">LATENCY</span>
+            <span class="t-cell-val" id="tLatency">—</span>
+          </div>
+          <div class="t-cell">
+            <span class="t-cell-label">ENGINE</span>
+            <span class="t-cell-val">TypeSafe Jev</span>
+          </div>
+          <div class="t-cell">
+            <span class="t-cell-label">EST. COST</span>
+            <span class="t-cell-val" id="tCost">—</span>
+          </div>
+        </div>
+
+        <!-- Collapsible Raw JSON -->
+        <details class="telemetry-details">
+          <summary class="details-summary">&gt; inspect raw decision payload</summary>
+          <pre class="json-dump" id="jsonDump">// Awaiting query...</pre>
+        </details>
+      </div>
+    </section>
+
+    <!-- Query History -->
+    <section class="history-section">
+      <div class="history-header">
+        <h2>query log</h2>
+        <span id="historyCount" class="history-count">0 queries</span>
+      </div>
+      <ul id="historyList" class="history-list">
+        <!-- Dynamic items -->
+      </ul>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
