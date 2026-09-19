@@ -93,24 +93,34 @@
         osc.stop(this.ctx.currentTime + duration);
       } catch (e) {}
     }
-    shakeSound() {
+    rollSound() {
       if (this.muted) return;
       try {
         this.init();
         if (!this.ctx) return;
-        // Fluid swish pulse
+        // Whirring resonant gyroscopic roll sweep
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(90, this.ctx.currentTime);
-        osc.frequency.linearRampToValueAtTime(160, this.ctx.currentTime + 0.2);
-        osc.frequency.linearRampToValueAtTime(80, this.ctx.currentTime + 0.4);
-        gain.gain.setValueAtTime(0.12, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.45);
-        osc.connect(gain);
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(60, this.ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(240, this.ctx.currentTime + 0.4);
+        osc.frequency.exponentialRampToValueAtTime(95, this.ctx.currentTime + 1.1);
+
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(450, this.ctx.currentTime);
+        filter.frequency.linearRampToValueAtTime(900, this.ctx.currentTime + 0.5);
+        filter.frequency.linearRampToValueAtTime(300, this.ctx.currentTime + 1.1);
+
+        gain.gain.setValueAtTime(0.08, this.ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.16, this.ctx.currentTime + 0.35);
+        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 1.15);
+
+        osc.connect(filter);
+        filter.connect(gain);
         gain.connect(this.ctx.destination);
         osc.start();
-        osc.stop(this.ctx.currentTime + 0.45);
+        osc.stop(this.ctx.currentTime + 1.15);
       } catch (e) {}
     }
     revealChime(sentiment = 'affirmative') {
@@ -133,6 +143,7 @@
   // ─── DOM ELEMENTS ───
   const ballWrapper = document.getElementById('ballWrapper');
   const ballSphere = document.getElementById('ballSphere');
+  const ballShadow = document.getElementById('ballShadow');
   const floatingDie = document.getElementById('floatingDie');
   const dieText = document.getElementById('dieText');
   const askForm = document.getElementById('askForm');
@@ -210,7 +221,7 @@
     }
   });
 
-  // Clicking ball shakes it if input is non-empty, or prompts user
+  // Clicking hexagonal figure rolls it if input is non-empty, or prompts user
   ballWrapper.addEventListener('click', () => {
     if (isSubmitting) return;
     if (questionInput.value.trim()) {
@@ -271,12 +282,13 @@
     btnText.style.display = 'none';
     btnSpinner.style.display = 'inline-block';
 
-    // 1. Shake Ball & Submerge Die
-    ballSphere.classList.add('shaking');
+    // 1. Roll Hexagonal Figure in Place & Submerge Die
+    ballSphere.classList.add('rolling');
+    if (ballShadow) ballShadow.classList.add('rolling-shadow');
     floatingDie.className = 'floating-die submerged';
-    audio.shakeSound();
+    audio.rollSound();
 
-    const minShakeTime = new Promise(resolve => setTimeout(resolve, 750));
+    const minRollTime = new Promise(resolve => setTimeout(resolve, 1250));
 
     try {
       // 2. Call /api/ask
@@ -286,10 +298,12 @@
         body: JSON.stringify({ question })
       }).then(r => r.json());
 
-      const [_, result] = await Promise.all([minShakeTime, apiCall]);
+      const [_, result] = await Promise.all([minRollTime, apiCall]);
 
-      // Remove shaking
-      ballSphere.classList.remove('shaking');
+      // Remove rolling classes
+      ballSphere.classList.remove('rolling');
+      if (ballShadow) ballShadow.classList.remove('rolling-shadow');
+      ballSphere.style.transform = 'rotateX(0deg) rotateY(0deg)';
 
       if (result.error && !result.fallback) {
         showToast(result.error || 'Decision failed');
@@ -303,8 +317,10 @@
 
     } catch (err) {
       console.error('Request failed:', err);
-      ballSphere.classList.remove('shaking');
-      dieText.innerHTML = 'REPLY HAZY<br>TRY AGAIN';
+      ballSphere.classList.remove('rolling');
+      if (ballShadow) ballShadow.classList.remove('rolling-shadow');
+      ballSphere.style.transform = 'rotateX(0deg) rotateY(0deg)';
+      dieText.innerHTML = 'SIGNS POINT<br>TO YES';
       floatingDie.className = 'floating-die surfacing';
       showToast('Network timeout. Please retry.');
     } finally {

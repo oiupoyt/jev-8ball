@@ -35,30 +35,49 @@
       </div>
     </header>
 
-    <!-- 8-Ball Interactive Stage -->
+    <!-- Hexagonal 8-Ball Interactive Stage -->
     <section class="ball-stage">
-      <div class="ball-wrapper" id="ballWrapper" title="Click to shake the oracle">
-        <div class="ball-sphere" id="ballSphere">
-          <!-- Fluid window / Viewport -->
-          <div class="fluid-window">
-            <div class="fluid-ambient"></div>
-            <!-- Floating Icosahedron Triangle Die -->
-            <div class="floating-die" id="floatingDie">
-              <svg class="die-svg" viewBox="0 0 160 160">
-                <!-- Triangle body -->
-                <polygon points="80,18 145,134 15,134" class="die-face" />
-                <polygon points="80,24 140,130 20,130" class="die-inner" />
-              </svg>
-              <div class="die-text-wrap">
-                <span class="die-text" id="dieText">CONCENTRATE<br>& ASK</span>
+      <div class="ball-wrapper" id="ballWrapper" title="Click to roll the oracle">
+        <!-- 3D Hexagonal Prism Figure -->
+        <div class="hex-figure-3d" id="ballSphere">
+          <!-- Hex Face Top / Cap -->
+          <div class="hex-cap hex-cap-top"></div>
+          <!-- Hex Side Faces (6 sides) -->
+          <div class="hex-facet hex-facet-0"></div>
+          <div class="hex-facet hex-facet-1"></div>
+          <div class="hex-facet hex-facet-2"></div>
+          <div class="hex-facet hex-facet-3"></div>
+          <div class="hex-facet hex-facet-4"></div>
+          <div class="hex-facet hex-facet-5"></div>
+          <!-- Hex Front Chamber Face with Viewport Window -->
+          <div class="hex-cap hex-cap-front">
+            <div class="fluid-window">
+              <div class="fluid-ambient"></div>
+              <!-- Floating Die: Hexagonal Oracle Plate -->
+              <div class="floating-die" id="floatingDie">
+                <svg class="die-svg" viewBox="0 0 140 140">
+                  <!-- Outer Hexagon -->
+                  <polygon points="70,6 125.4,38 125.4,102 70,134 14.6,102 14.6,38" class="die-face" />
+                  <!-- Inner Hexagon Rim -->
+                  <polygon points="70,12 119.8,40.7 119.8,99.3 70,128 20.2,99.3 20.2,40.7" class="die-inner" />
+                  <!-- Accent lines radiating from center -->
+                  <line x1="70" y1="12" x2="70" y2="28" class="die-accent-line" />
+                  <line x1="70" y1="128" x2="70" y2="112" class="die-accent-line" />
+                  <line x1="20.2" y1="40.7" x2="34" y2="48.7" class="die-accent-line" />
+                  <line x1="119.8" y1="40.7" x2="106" y2="48.7" class="die-accent-line" />
+                  <line x1="20.2" y1="99.3" x2="34" y2="91.3" class="die-accent-line" />
+                  <line x1="119.8" y1="99.3" x2="106" y2="91.3" class="die-accent-line" />
+                </svg>
+                <div class="die-text-wrap">
+                  <span class="die-text" id="dieText">CONCENTRATE<br>& ASK</span>
+                </div>
               </div>
+              <div class="fluid-ripple" id="fluidRipple"></div>
             </div>
-            <!-- Fluid bubbles / ripples -->
-            <div class="fluid-ripple" id="fluidRipple"></div>
           </div>
         </div>
         <!-- Floor Shadow -->
-        <div class="ball-shadow"></div>
+        <div class="ball-shadow" id="ballShadow"></div>
       </div>
     </section>
 

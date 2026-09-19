@@ -147,13 +147,13 @@ h1 {
   color: var(--text-muted);
 }
 
-/* ─── 8-BALL STAGE & VESSEL ─── */
+/* ─── HEXAGONAL 3D FIGURE STAGE & VESSEL ─── */
 .ball-stage {
   display: flex;
   justify-content: center;
   align-items: center;
-  margin: 10px 0 30px;
-  perspective: 900px;
+  margin: 14px 0 32px;
+  perspective: 1000px;
 }
 
 .ball-wrapper {
@@ -162,30 +162,78 @@ h1 {
   flex-direction: column;
   align-items: center;
   cursor: pointer;
+  perspective: 1000px;
 }
 
-.ball-sphere {
-  width: 230px;
-  height: 230px;
-  border-radius: 50% !important; /* Keep ball spherical */
-  background: radial-gradient(circle at 35% 30%, #2e2e2e 0%, #171717 40%, #090909 75%, #000000 100%);
-  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.85), inset 0 2px 4px rgba(255, 255, 255, 0.12), inset 0 -6px 14px rgba(0, 0, 0, 0.9);
+/* Hexagonal 3D Prism Figure */
+.hex-figure-3d {
+  width: 210px;
+  height: 210px;
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1);
+  margin-bottom: 6px;
+}
+
+/* Hex Prism Cap - Front / Back */
+.hex-cap {
+  position: absolute;
+  inset: 0;
+  clip-path: polygon(50% 0%, 93.3% 25%, 93.3% 75%, 50% 100%, 6.7% 75%, 6.7% 25%);
+}
+
+.hex-cap-top {
+  transform: translateZ(-28px);
+  background: radial-gradient(circle at 50% 50%, #171717 0%, #0c0c0c 60%, #000 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.9);
+}
+
+.hex-cap-front {
+  transform: translateZ(28px);
+  background: radial-gradient(circle at 35% 30%, #2a2a2a 0%, #151515 45%, #0a0a0a 75%, #020202 100%);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow:
+    0 15px 35px rgba(0, 0, 0, 0.9),
+    inset 0 2px 4px rgba(255, 255, 255, 0.2),
+    inset 0 -6px 14px rgba(0, 0, 0, 0.9);
   display: flex;
   align-items: center;
   justify-content: center;
-  position: relative;
-  transition: transform 0.15s ease-out;
-  transform-style: preserve-3d;
 }
 
-/* Fluid Viewport Window */
+/* 6 Hexagonal Prism Facet Edges around the sides */
+.hex-facet {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 105px;
+  height: 56px;
+  margin-left: -52.5px;
+  margin-top: -28px;
+  background: linear-gradient(to bottom, #222, #0d0d0d 60%, #050505);
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.8);
+  box-sizing: border-box;
+  opacity: 0.92;
+  pointer-events: none;
+}
+
+.hex-facet-0 { transform: rotateZ(0deg) rotateX(90deg) translateZ(90.9px); }
+.hex-facet-1 { transform: rotateZ(60deg) rotateX(90deg) translateZ(90.9px); filter: brightness(0.85); }
+.hex-facet-2 { transform: rotateZ(120deg) rotateX(90deg) translateZ(90.9px); filter: brightness(0.65); }
+.hex-facet-3 { transform: rotateZ(180deg) rotateX(90deg) translateZ(90.9px); filter: brightness(0.5); }
+.hex-facet-4 { transform: rotateZ(240deg) rotateX(90deg) translateZ(90.9px); filter: brightness(0.7); }
+.hex-facet-5 { transform: rotateZ(300deg) rotateX(90deg) translateZ(90.9px); filter: brightness(0.9); }
+
+/* Hex Fluid Viewport Window */
 .fluid-window {
-  width: 140px;
-  height: 140px;
-  border-radius: 50% !important; /* Inner circular liquid reservoir */
-  background: radial-gradient(circle, #081226 0%, #040916 65%, #010308 100%);
-  border: 2px solid rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 4px 18px rgba(0, 0, 0, 0.95), 0 0 10px rgba(0, 0, 0, 0.5);
+  width: 142px;
+  height: 142px;
+  clip-path: polygon(50% 0%, 93.3% 25%, 93.3% 75%, 50% 100%, 6.7% 75%, 6.7% 25%);
+  background: radial-gradient(circle, #08142a 0%, #040916 65%, #010308 100%);
+  border: 1px solid rgba(56, 189, 248, 0.15);
+  box-shadow: inset 0 4px 22px rgba(0, 0, 0, 0.95), 0 0 14px rgba(0, 0, 0, 0.8);
   position: relative;
   overflow: hidden;
   display: flex;
@@ -196,11 +244,11 @@ h1 {
 .fluid-ambient {
   position: absolute;
   inset: 0;
-  background: radial-gradient(circle at 50% 30%, rgba(56, 189, 248, 0.08) 0%, transparent 70%);
+  background: radial-gradient(circle at 50% 30%, rgba(56, 189, 248, 0.12) 0%, transparent 70%);
   pointer-events: none;
 }
 
-/* Floating Triangle Die */
+/* Floating Hexagonal Die Plate */
 .floating-die {
   position: relative;
   width: 120px;
@@ -231,14 +279,21 @@ h1 {
 }
 .die-inner {
   fill: #08142a;
+  stroke: rgba(56, 189, 248, 0.2);
+  stroke-width: 1;
+}
+.die-accent-line {
+  stroke: rgba(56, 189, 248, 0.3);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
 }
 
 .die-text-wrap {
   position: relative;
   z-index: 2;
-  width: 78px;
+  width: 82px;
   text-align: center;
-  margin-top: 14px;
+  margin-top: 0;
 }
 
 .die-text {
@@ -247,17 +302,17 @@ h1 {
   letter-spacing: 0.04em;
   color: #bae6fd;
   text-transform: uppercase;
-  line-height: 1.25;
+  line-height: 1.28;
   display: inline-block;
-  text-shadow: 0 0 6px rgba(56, 189, 248, 0.4);
+  text-shadow: 0 0 8px rgba(56, 189, 248, 0.45);
   transition: opacity 0.4s ease, transform 0.4s ease;
 }
 
 /* Submerged state */
 .floating-die.submerged {
-  transform: scale(0.35) translateY(18px) rotate(15deg) !important;
+  transform: scale(0.28) translateY(24px) rotate(35deg) !important;
   opacity: 0;
-  filter: blur(4px);
+  filter: blur(5px);
   animation: none;
 }
 
@@ -266,30 +321,71 @@ h1 {
   animation: dieSurface 1.1s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
 }
 @keyframes dieSurface {
-  0% { transform: scale(0.4) translateY(20px) rotate(-20deg); opacity: 0; filter: blur(4px); }
-  60% { transform: scale(1.06) translateY(-2px) rotate(2deg); opacity: 0.9; filter: blur(0); }
+  0% { transform: scale(0.35) translateY(24px) rotate(-30deg); opacity: 0; filter: blur(5px); }
+  60% { transform: scale(1.08) translateY(-2px) rotate(2deg); opacity: 0.95; filter: blur(0); }
   100% { transform: scale(1) translateY(0) rotate(0deg); opacity: 1; filter: blur(0); }
 }
 
-/* Shake Animation on Ball */
-.ball-sphere.shaking {
-  animation: eightBallShake 0.75s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+/* ─── 3D ROLL-IN-PLACE ANIMATION ─── */
+.hex-figure-3d.rolling {
+  animation: hexRollInPlace 1.25s cubic-bezier(0.45, 0.05, 0.25, 1) forwards;
 }
 
-@keyframes eightBallShake {
-  10%, 90% { transform: translate3d(-3px, 0, 0) rotate(-2deg); }
-  20%, 80% { transform: translate3d(4px, 0, 0) rotate(2deg); }
-  30%, 50%, 70% { transform: translate3d(-6px, 0, 0) rotate(-3deg); }
-  40%, 60% { transform: translate3d(6px, 0, 0) rotate(3deg); }
+@keyframes hexRollInPlace {
+  0% {
+    transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(1);
+  }
+  15% {
+    transform: rotateX(70deg) rotateY(-80deg) rotateZ(-45deg) translateY(-8px) scale(1.04);
+  }
+  35% {
+    transform: rotateX(190deg) rotateY(160deg) rotateZ(120deg) translateY(-14px) scale(1.08);
+  }
+  55% {
+    transform: rotateX(310deg) rotateY(380deg) rotateZ(260deg) translateY(-8px) scale(1.05);
+  }
+  75% {
+    transform: rotateX(375deg) rotateY(560deg) rotateZ(350deg) translateY(-2px) scale(1.01);
+  }
+  90% {
+    transform: rotateX(358deg) rotateY(724deg) rotateZ(362deg) translateY(0px) scale(0.99);
+  }
+  100% {
+    transform: rotateX(360deg) rotateY(720deg) rotateZ(360deg) translateY(0px) scale(1);
+  }
 }
 
-/* Floor Shadow */
+/* Synchronized Shadow Expansion / Compression during Roll */
 .ball-shadow {
-  width: 170px;
-  height: 20px;
+  width: 180px;
+  height: 22px;
   border-radius: 50% !important;
-  background: radial-gradient(ellipse, rgba(0, 0, 0, 0.6) 0%, transparent 70%);
-  margin-top: 14px;
+  background: radial-gradient(ellipse, rgba(0, 0, 0, 0.75) 0%, transparent 70%);
+  margin-top: 8px;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.ball-shadow.rolling-shadow {
+  animation: shadowRollSync 1.25s cubic-bezier(0.45, 0.05, 0.25, 1) forwards;
+}
+
+@keyframes shadowRollSync {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.75;
+  }
+  35% {
+    transform: scale(0.72);
+    opacity: 0.35;
+  }
+  55% {
+    transform: scale(0.85);
+    opacity: 0.5;
+  }
+  85% {
+    transform: scale(1.05);
+    opacity: 0.85;
+  }
 }
 
 /* ─── PROMPT FORM ─── */

@@ -55,36 +55,42 @@ export async function onRequestPost(context) {
   try {
     const payload = {
       model: MODEL,
-      state: { question: cleanQuestion },
+      state: {
+        question: cleanQuestion,
+        directive: "You are the definitive Magic 8-Ball oracle. Every query demands a bold, prophetic, decisive verdict (affirmative or negative). You must actively choose a clear side. Do NOT default to hazy, ambiguous, or neutral answers unless the user's question is completely incomprehensible gibberish or an impossible paradox."
+      },
       questions: {
         favorable: {
           type: "noul",
-          instructions: "Is the underlying outcome, recommendation, or premise of the user's question affirmative or likely to happen?",
+          instructions: "Determine whether the fortune leans affirmative/favorable (1.0) or negative/adverse (0.0). Make a firm choice and avoid sitting in the ambiguous 0.45 - 0.55 zone.",
           criteria: {
-            true: "The outcome leans affirmative, positive, or advisable.",
-            false: "The outcome leans doubtful, negative, or unadvisable."
+            true: "The fortune favors yes, affirmative, or an auspicious outcome.",
+            false: "The fortune favors no, negative, or an inauspicious outcome."
           }
         },
         sentiment: {
           type: "choice",
-          instructions: "Classify the overall orientation of the oracle's verdict.",
+          instructions: "Declare the oracle's verdict as either affirmative or negative. Reserve neutral strictly for non-questions or unparseable gibberish.",
           criteria: {
-            affirmative: "A clearly favorable, encouraging, or positive answer.",
-            neutral: "Uncertain, ambiguous, hazy, or premature to determine.",
-            negative: "An unfavorable, contrary, or discouraging answer."
+            affirmative: "Auspicious, affirmative, or confirming prophecy.",
+            negative: "Inauspicious, negative, or adverse prophecy.",
+            neutral: "Strictly unparseable gibberish or logical paradox."
           }
         },
         aphorism: {
           type: "choice",
-          instructions: "Select the most accurate Magic 8-Ball statement to deliver.",
+          instructions: "Select the authentic Magic 8-Ball prophecy that best fits the question.",
           criteria: {
-            certain: "It is certain or without a doubt.",
-            yes_definitely: "Yes definitely or decidedly so.",
-            signs_yes: "Signs point to yes or most likely.",
-            reply_hazy: "Reply hazy, try again.",
-            cannot_predict: "Cannot predict now or ask again later.",
-            my_reply_no: "My reply is no or outlook not so good.",
-            very_doubtful: "Very doubtful or don't count on it."
+            certain: "It is certain.",
+            yes_definitely: "Yes definitely.",
+            signs_yes: "Signs point to yes.",
+            outlook_good: "Outlook good.",
+            most_likely: "Most likely.",
+            my_reply_no: "My reply is no.",
+            very_doubtful: "Very doubtful.",
+            outlook_bad: "Outlook not so good.",
+            dont_count: "Don't count on it.",
+            reply_hazy: "Reply hazy, try again (strictly reserved for total gibberish)."
           }
         }
       }
@@ -119,17 +125,29 @@ export async function onRequestPost(context) {
     const answers = data.answers || {};
 
     const favorableNoul = answers.favorable?.noul ?? 0.5;
-    const sentimentChoice = answers.sentiment?.choice || (favorableNoul > 0.6 ? "affirmative" : favorableNoul < 0.4 ? "negative" : "neutral");
-    const aphorismKey = answers.aphorism?.choice;
+    let sentimentChoice = answers.sentiment?.choice;
+    if (!sentimentChoice || sentimentChoice === "neutral") {
+      sentimentChoice = favorableNoul >= 0.5 ? "affirmative" : "negative";
+    }
+    let aphorismKey = answers.aphorism?.choice;
+
+    // Prevent unwanted hazy response if noul shows conviction
+    if (aphorismKey === "reply_hazy" || aphorismKey === "cannot_predict") {
+      if (favorableNoul >= 0.5) {
+        aphorismKey = favorableNoul > 0.75 ? "certain" : "signs_yes";
+      } else {
+        aphorismKey = favorableNoul < 0.3 ? "my_reply_no" : "outlook_bad";
+      }
+    }
 
     let answerText = APHORISMS[aphorismKey]?.text;
     if (!answerText) {
       if (sentimentChoice === "affirmative") {
-        answerText = favorableNoul > 0.8 ? "It is certain." : "Signs point to yes.";
+        answerText = favorableNoul > 0.75 ? "It is certain." : "Signs point to yes.";
       } else if (sentimentChoice === "negative") {
-        answerText = favorableNoul < 0.2 ? "My reply is no." : "Outlook not so good.";
+        answerText = favorableNoul < 0.25 ? "My reply is no." : "Outlook not so good.";
       } else {
-        answerText = "Reply hazy, try again.";
+        answerText = favorableNoul >= 0.5 ? "Signs point to yes." : "Outlook not so good.";
       }
     }
 
