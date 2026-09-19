@@ -170,13 +170,32 @@
   const toast = document.getElementById('toast');
 
   let isSubmitting = false;
-  let historyData = [];
+  let historyData = loadHistory();
 
-  // Load history from localStorage
-  try {
-    const saved = localStorage.getItem('jev_history');
-    if (saved) historyData = JSON.parse(saved);
-  } catch (e) {}
+  // Read the stored log defensively: a stale, hand-edited or truncated value must never
+  // break the interface, so anything that is not a well formed entry is dropped.
+  function loadHistory() {
+    const sentiments = ['affirmative', 'negative', 'neutral'];
+    try {
+      const saved = localStorage.getItem('jev_history');
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter(
+          (item) => item && typeof item.question === 'string' && typeof item.answer === 'string'
+        )
+        .slice(0, 25)
+        .map((item) => ({
+          question: item.question,
+          answer: item.answer,
+          sentiment: sentiments.includes(item.sentiment) ? item.sentiment : 'neutral',
+          timestamp: typeof item.timestamp === 'string' ? item.timestamp : ''
+        }));
+    } catch (e) {
+      return [];
+    }
+  }
 
   // ─── SOUND TOGGLE ───
   function updateSoundUI() {
@@ -296,7 +315,21 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question })
-      }).then(r => r.json());
+      }).then(async (response) => {
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch (e) {
+          payload = null;
+        }
+        // A non-OK status is only usable when the backend shipped a fallback with it.
+        if (!response.ok && !(payload && payload.fallback)) {
+          throw new Error(
+            (payload && payload.error) || `Oracle returned HTTP ${response.status}`
+          );
+        }
+        return payload;
+      });
 
       const [_, result] = await Promise.all([minRollTime, apiCall]);
 
@@ -304,6 +337,10 @@
       ballSphere.classList.remove('rolling');
       if (ballShadow) ballShadow.classList.remove('rolling-shadow');
       ballSphere.style.transform = 'rotateX(0deg) rotateY(0deg)';
+
+      if (!result) {
+        throw new Error('Oracle returned an empty response.');
+      }
 
       if (result.error && !result.fallback) {
         showToast(result.error || 'Decision failed');
@@ -320,9 +357,12 @@
       ballSphere.classList.remove('rolling');
       if (ballShadow) ballShadow.classList.remove('rolling-shadow');
       ballSphere.style.transform = 'rotateX(0deg) rotateY(0deg)';
-      dieText.innerHTML = 'SIGNS POINT<br>TO YES';
+      // Never show an affirmative prophecy for a request that failed.
+      dieText.innerHTML = 'CANNOT<br>PREDICT';
       floatingDie.className = 'floating-die surfacing';
-      showToast('Network timeout. Please retry.');
+      telemetryBadge.className = 'telemetry-badge neutral';
+      telemetryBadge.textContent = 'ERROR';
+      showToast(err && err.message ? err.message : 'Request failed. Please retry.');
     } finally {
       isSubmitting = false;
       submitBtn.disabled = false;
@@ -334,7 +374,9 @@
   }
 
   function displayOracleAnswer(data) {
-    const formattedText = data.answer.replace(/\s+/g, ' ').toUpperCase();
+    const formattedText = String(data.answer || 'Cannot predict now')
+      .replace(/\s+/g, ' ')
+      .toUpperCase();
     const words = formattedText.split(' ');
     let htmlAnswer = formattedText;
     if (words.length > 2) {
@@ -348,19 +390,22 @@
     // Audio chime
     audio.revealChime(data.sentiment);
 
-    // Update Telemetry
-    telemetryBadge.className = `telemetry-badge ${data.sentiment}`;
-    telemetryBadge.textContent = data.sentiment.toUpperCase();
+    // Update Telemetry. An offline fallback is a local hash guess, so it is labelled and
+    // must not be shown with the calibrated probability and confidence of a real decision.
+    const offline = Boolean(data.offline);
+    const sentiment = offline ? 'neutral' : (data.sentiment || 'neutral');
+    telemetryBadge.className = `telemetry-badge ${offline ? 'offline' : sentiment}`;
+    telemetryBadge.textContent = offline ? 'OFFLINE' : sentiment.toUpperCase();
 
     tVerdict.textContent = data.answer;
-    tNoul.textContent = (data.noul !== undefined ? data.noul.toFixed(2) : '0.50');
+    tNoul.textContent = offline ? '—' : (data.noul !== undefined ? data.noul.toFixed(2) : '0.50');
 
-    noulFill.className = `meter-fill ${data.sentiment}`;
-    noulFill.style.width = `${Math.round((data.noul || 0.5) * 100)}%`;
+    noulFill.className = `meter-fill ${sentiment}`;
+    noulFill.style.width = offline ? '0%' : `${Math.round((data.noul || 0.5) * 100)}%`;
 
-    tConfidence.textContent = `${Math.round((data.confidence || 0.8) * 100)}%`;
+    tConfidence.textContent = offline ? '—' : `${Math.round((data.confidence || 0.8) * 100)}%`;
     tLatency.textContent = `${data.latency || 320}ms`;
-    tCost.textContent = data.cost ? `$${data.cost.toFixed(6)}` : '< $0.0001';
+    tCost.textContent = offline ? '—' : data.cost ? `$${data.cost.toFixed(6)}` : '< $0.0001';
 
     jsonDump.textContent = JSON.stringify(data.raw || data, null, 2);
 
@@ -371,6 +416,8 @@
       sentiment: data.sentiment,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
+
+    if (offline) showToast('Offline guess — the oracle could not be reached');
   }
 
   function addHistoryItem(item) {
@@ -408,8 +455,8 @@
     });
   }
 
-  function escapeHtml(str) {
-    return str
+  function escapeHtml(value) {
+    return String(value ?? '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')

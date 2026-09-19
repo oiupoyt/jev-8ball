@@ -545,6 +545,11 @@ h1 {
   border-color: var(--red);
   background: rgba(239, 68, 68, 0.08);
 }
+.telemetry-badge.offline {
+  color: var(--text-muted);
+  border-color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.04);
+}
 
 .telemetry-body {
   padding: 12px;
