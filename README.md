@@ -32,10 +32,24 @@ PORT=3000
 OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
+The key is **required** — there is no bundled fallback. Without it `POST /api/ask`
+answers `503` and `GET /api/status` reports `"hasKey": false`. For Cloudflare, store
+it as a secret instead of a plain variable:
+
+```bash
+wrangler secret put OPENROUTER_API_KEY
+```
+
 ## endpoints
 
-- `GET /api/status` - model status and latency check
+- `GET /api/status` - model status and whether the API key is configured
 - `POST /api/ask` - submit query to Jev decisions pipeline
+
+## tests
+
+```bash
+npm test
+```
 
 ## license
 

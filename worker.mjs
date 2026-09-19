@@ -1,6 +1,16 @@
-const DEFAULT_KEY = "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";
 const JEV_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
 const MODEL = "typesafe/jev-1.13";
+
+const CORS_HEADERS = { "Access-Control-Allow-Origin": "*" };
+
+// Route every response through one helper so error paths cannot forget the JSON content
+// type or the CORS headers, and so the API key never has a hardcoded fallback.
+function json(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json", ...CORS_HEADERS }
+  });
+}
 
 const APHORISMS = {
   certain: { text: "It is certain.", sentiment: "affirmative" },
@@ -45,41 +55,31 @@ export default {
 
     // GET /api/status
     if (url.pathname === "/api/status") {
-      const hasKey = Boolean(env.OPENROUTER_API_KEY || DEFAULT_KEY);
-      return new Response(JSON.stringify({
+      return json({
         status: "online",
         model: MODEL,
         engine: "TypeSafe Jev (Cloudflare Edge Worker)",
-        hasKey
-      }), {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*"
-        }
+        hasKey: Boolean(env.OPENROUTER_API_KEY)
       });
     }
 
     // POST /api/ask
     if (url.pathname === "/api/ask" && request.method === "POST") {
-      const apiKey = env.OPENROUTER_API_KEY || DEFAULT_KEY;
+      const apiKey = env.OPENROUTER_API_KEY;
+      if (!apiKey) {
+        return json({ error: "Oracle is not configured. Set the OPENROUTER_API_KEY secret." }, 503);
+      }
 
       let body;
       try {
         body = await request.json();
       } catch (e) {
-        return new Response(JSON.stringify({ error: "Invalid JSON input." }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" }
-        });
+        return json({ error: "Invalid JSON input." }, 400);
       }
 
       const question = body.question;
       if (!question || typeof question !== "string" || !question.trim()) {
-        return new Response(JSON.stringify({ error: "Question is required." }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" }
-        });
+        return json({ error: "Question is required." }, 400);
       }
 
       const cleanQuestion = question.trim().slice(0, 300);
@@ -144,14 +144,11 @@ export default {
 
         if (!response.ok) {
           const errText = await response.text();
-          return new Response(JSON.stringify({
+          return json({
             error: "OpenRouter decision error",
             details: errText,
             fallback: fallbackDecision(cleanQuestion)
-          }), {
-            status: response.status,
-            headers: { "Content-Type": "application/json" }
-          });
+          }, response.status);
         }
 
         const data = await response.json();
@@ -204,24 +201,16 @@ export default {
           raw: data
         };
 
-        return new Response(JSON.stringify(result), {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
-          }
-        });
+        return json(result);
 
       } catch (err) {
+        console.error("Jev decision request failed:", err);
         const latency = Date.now() - startTime;
-        return new Response(JSON.stringify({
+        return json({
           question: cleanQuestion,
           ...fallbackDecision(cleanQuestion),
           latency,
           offline: true
-        }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" }
         });
       }
     }

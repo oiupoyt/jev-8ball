@@ -7,9 +7,15 @@ const app = express();
 app.disable('x-powered-by');
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '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';
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const JEV_DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions';
 const MODEL = 'typesafe/jev-1.13';
+
+if (!OPENROUTER_API_KEY) {
+  console.warn(
+    '[jev-8ball] OPENROUTER_API_KEY is not set — /api/ask will answer 503. Add it to .env (see .env.example).'
+  );
+}
 
 app.use(cors());
 app.use(express.json());
@@ -53,6 +59,10 @@ app.get('/api/status', (req, res) => {
 
 // POST /api/ask
 app.post('/api/ask', async (req, res) => {
+  if (!OPENROUTER_API_KEY) {
+    return res.status(503).json({ error: 'Oracle is not configured. Set OPENROUTER_API_KEY.' });
+  }
+
   const { question } = req.body;
   if (!question || typeof question !== 'string' || !question.trim()) {
     return res.status(400).json({ error: 'Question is required.' });
