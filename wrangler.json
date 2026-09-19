@@ -1,5 +1,8 @@
 {
   "name": "jev-8ball",
   "compatibility_date": "2024-09-23",
-  "pages_build_output_dir": "./public"
+  "main": "worker.mjs",
+  "assets": {
+    "directory": "./public"
+  }
 }
