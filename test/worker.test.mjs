@@ -25,17 +25,29 @@ test.afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-test('a missing key is reported instead of silently using a bundled one', async () => {
-  const response = await worker.fetch(ask({ question: 'Will it deploy?' }), {}, {});
-  assert.equal(response.status, 503);
-  assert.match((await response.json()).error, /not configured/i);
+test('status reports where the key came from', async () => {
+  globalThis.fetch = () => {
+    throw new Error('status must not call upstream');
+  };
+  const viaRepo = await (await worker.fetch(status(), {}, {})).json();
+  assert.equal(viaRepo.hasKey, true);
+  assert.equal(viaRepo.keySource, 'repo');
+
+  const viaEnv = await (
+    await worker.fetch(status(), { OPENROUTER_API_KEY: 'test-key' }, {})
+  ).json();
+  assert.equal(viaEnv.hasKey, true);
+  assert.equal(viaEnv.keySource, 'env');
 });
 
-test('status reports hasKey straight from the environment', async () => {
-  const without = await worker.fetch(status(), {}, {});
-  assert.equal((await without.json()).hasKey, false);
-  const withKey = await worker.fetch(status(), { OPENROUTER_API_KEY: 'test-key' }, {});
-  assert.equal((await withKey.json()).hasKey, true);
+test('a configured key always wins over the in-repo one', async () => {
+  let authorization = null;
+  globalThis.fetch = async (url, init) => {
+    authorization = init.headers.Authorization;
+    return new Response(JSON.stringify({ answers: {} }), { status: 200 });
+  };
+  await worker.fetch(ask({ question: 'Will it deploy?' }), { OPENROUTER_API_KEY: 'env-key' }, {});
+  assert.equal(authorization, 'Bearer env-key');
 });
 
 test('invalid input is rejected before any upstream call', async () => {
@@ -46,6 +58,13 @@ test('invalid input is rejected before any upstream call', async () => {
   assert.equal((await worker.fetch(ask('{ not json'), env, {})).status, 400);
   assert.equal((await worker.fetch(ask({ question: '   ' }), env, {})).status, 400);
   assert.equal((await worker.fetch(ask({}), env, {})).status, 400);
+  // Oversized questions are trimmed rather than rejected.
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ answers: {}, model: 'typesafe/jev-1.13' }), { status: 200 });
+  const long = await (
+    await worker.fetch(ask({ question: 'x'.repeat(900) }), env, {})
+  ).json();
+  assert.equal(long.question.length, 300);
 });
 
 test('a decisive verdict replaces a hazy aphorism', async () => {

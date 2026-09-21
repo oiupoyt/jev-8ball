@@ -1,6 +1,14 @@
 const JEV_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
 const MODEL = "typesafe/jev-1.13";
 
+// Mirrors worker.mjs: the repo carries a key so a deploy works with no secret set.
+// Delete this constant and set OPENROUTER_API_KEY to require configuration.
+const REPO_API_KEY = "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";
+
+function resolveApiKey(env) {
+  return env.OPENROUTER_API_KEY || REPO_API_KEY || null;
+}
+
 const CORS_HEADERS = { "Access-Control-Allow-Origin": "*" };
 
 // One response helper so error paths cannot forget the JSON content type or the CORS
@@ -39,7 +47,7 @@ const APHORISMS = {
 
 export async function onRequestPost(context) {
   const { request, env } = context;
-  const apiKey = env.OPENROUTER_API_KEY;
+  const apiKey = resolveApiKey(env);
   if (!apiKey) {
     return json({ error: "Oracle is not configured. Set the OPENROUTER_API_KEY secret." }, 503);
   }
@@ -58,6 +66,38 @@ export async function onRequestPost(context) {
 
   const cleanQuestion = question.trim().slice(0, 300);
   const startTime = Date.now();
+
+  if (env.LAYA_API_URL) {
+    try {
+      const layaRes = await fetch(`${env.LAYA_API_URL}/api/ask`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: cleanQuestion }),
+        signal: AbortSignal.timeout(6000)
+      });
+      if (layaRes.ok) {
+        const data = await layaRes.json();
+        return json({
+          question: cleanQuestion,
+          answer: data.answer,
+          sentiment: data.sentiment,
+          noul: data.noul,
+          confidence: data.confidence,
+          probabilities: data.probabilities || {},
+          aphorismKey: data.aphorismKey || "signs_yes",
+          latency: Date.now() - startTime,
+          cost: 0,
+          usage: { prompt_tokens: data.raw?.usage?.input_tokens ?? 38, completion_tokens: 0 },
+          model: data.model || "convaiinnovations/laya-typed-decisions",
+          engine: "Laya System 1 (Tablet via Tunnel)",
+          tablet: true,
+          raw: data
+        });
+      }
+    } catch (e) {
+      // Fall back to OpenRouter
+    }
+  }
 
   try {
     const payload = {

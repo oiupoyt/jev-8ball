@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="jev8ball">
+  <rect width="64" height="64" fill="#0b0b0b"/>
+  <polygon points="32,4 56,18 56,46 32,60 8,46 8,18" fill="#161616" stroke="#38bdf8" stroke-width="2"/>
+  <polygon points="32,13 48,22 48,42 32,51 16,42 16,22" fill="#05080f" stroke="#1f3a4d" stroke-width="1.5"/>
+  <text x="32" y="38" text-anchor="middle" font-family="monospace" font-size="20" font-weight="700" fill="#e5f2ff">8</text>
+</svg>

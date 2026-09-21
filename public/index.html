@@ -2,177 +2,161 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-  <title>jev8ball // neural oracle</title>
-  <meta name="description" content="A minimalist Magic 8-Ball powered by TypeSafe Jev structured decision intelligence on OpenRouter.">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>jev8ball // neural decision oracle</title>
+  <meta name="description" content="A minimalist Magic 8-Ball powered by TypeSafe Jev structured decision intelligence on OpenRouter. Ask a yes/no question and get a calibrated verdict with full decision telemetry.">
   <meta name="theme-color" content="#0b0b0b">
+  <meta name="color-scheme" content="dark">
 
-  <!-- Monospace Font -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="jev8ball // neural decision oracle">
+  <meta property="og:description" content="Ask a yes/no question. Get a calibrated verdict with probability, confidence, latency and cost.">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="jev8ball">
+  <meta name="twitter:description" content="Type-safe neural decision oracle on OpenRouter.">
+
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  <!-- Ambient floating particles like katdrop -->
-  <canvas id="particles"></canvas>
+  <canvas id="particles" aria-hidden="true"></canvas>
+  <a class="skip-link" href="#questionInput">Skip to question input</a>
 
   <main class="container">
-    <!-- Header -->
     <header class="header">
       <div class="top-nav">
         <span class="brand-tag">oracle.sys</span>
-        <button id="soundToggle" class="btn-ghost" title="Toggle audio feedback">sound: on</button>
+        <div class="nav-actions">
+          <button id="soundToggle" class="btn-ghost" type="button" aria-pressed="false" title="Toggle procedural audio">sound: on</button>
+          <button id="motionToggle" class="btn-ghost" type="button" aria-pressed="false" title="Reduce animation">motion: full</button>
+        </div>
       </div>
       <h1>jev8ball</h1>
       <div class="subtitle-row">
         <span class="subtitle">// type-safe neural decision oracle</span>
-        <span class="status-sep">•</span>
-        <div id="backendStatus" class="backend-status" title="Click to test model latency">
-          <span class="status-dot"></span>
-          <span id="statusText" class="status-text">typesafe/jev-1.13</span>
-        </div>
+        <span class="status-sep" aria-hidden="true">•</span>
+        <button id="backendStatus" class="backend-status" type="button" title="Re-check the backend">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="statusText" class="status-text">checking…</span>
+        </button>
       </div>
     </header>
 
-    <!-- Hexagonal 8-Ball Interactive Stage -->
-    <section class="ball-stage">
-      <div class="ball-wrapper" id="ballWrapper" title="Click to roll the oracle">
-        <!-- 3D Hexagonal Prism Figure -->
-        <div class="hex-figure-3d" id="ballSphere">
-          <!-- Hex Face Top / Cap -->
-          <div class="hex-cap hex-cap-top"></div>
-          <!-- Hex Side Faces (6 sides) -->
-          <div class="hex-facet hex-facet-0"></div>
-          <div class="hex-facet hex-facet-1"></div>
-          <div class="hex-facet hex-facet-2"></div>
-          <div class="hex-facet hex-facet-3"></div>
-          <div class="hex-facet hex-facet-4"></div>
-          <div class="hex-facet hex-facet-5"></div>
-          <!-- Hex Front Chamber Face with Viewport Window -->
-          <div class="hex-cap hex-cap-front">
-            <div class="fluid-window">
-              <div class="fluid-ambient"></div>
-              <!-- Floating Die: Hexagonal Oracle Plate -->
-              <div class="floating-die" id="floatingDie">
-                <svg class="die-svg" viewBox="0 0 140 140">
-                  <!-- Outer Hexagon -->
-                  <polygon points="70,6 125.4,38 125.4,102 70,134 14.6,102 14.6,38" class="die-face" />
-                  <!-- Inner Hexagon Rim -->
-                  <polygon points="70,12 119.8,40.7 119.8,99.3 70,128 20.2,99.3 20.2,40.7" class="die-inner" />
-                  <!-- Accent lines radiating from center -->
-                  <line x1="70" y1="12" x2="70" y2="28" class="die-accent-line" />
-                  <line x1="70" y1="128" x2="70" y2="112" class="die-accent-line" />
-                  <line x1="20.2" y1="40.7" x2="34" y2="48.7" class="die-accent-line" />
-                  <line x1="119.8" y1="40.7" x2="106" y2="48.7" class="die-accent-line" />
-                  <line x1="20.2" y1="99.3" x2="34" y2="91.3" class="die-accent-line" />
-                  <line x1="119.8" y1="99.3" x2="106" y2="91.3" class="die-accent-line" />
-                </svg>
-                <div class="die-text-wrap">
-                  <span class="die-text" id="dieText">CONCENTRATE<br>& ASK</span>
-                </div>
-              </div>
-              <div class="fluid-ripple" id="fluidRipple"></div>
-            </div>
-          </div>
-        </div>
-        <!-- Floor Shadow -->
-        <div class="ball-shadow" id="ballShadow"></div>
+    <!-- Software-rendered 3D oracle vessel -->
+    <section class="ball-stage" aria-label="Oracle vessel">
+      <div class="ball-frame">
+        <canvas id="oracleCanvas" class="oracle-canvas" width="344" height="344" role="img"
+                aria-label="A hexagonal metal vessel filled with liquid. A hexagonal die floats inside and carries the verdict."></canvas>
+        <button id="rollButton" class="roll-trigger" type="button">
+          <span class="sr-only">Roll the oracle</span>
+        </button>
+        <span class="frame-corner frame-corner-tl" aria-hidden="true"></span>
+        <span class="frame-corner frame-corner-tr" aria-hidden="true"></span>
+        <span class="frame-corner frame-corner-bl" aria-hidden="true"></span>
+        <span class="frame-corner frame-corner-br" aria-hidden="true"></span>
       </div>
+      <p class="stage-hint" id="stageHint">click the vessel to shake it</p>
     </section>
 
-    <!-- Input Form -->
+    <!-- Input -->
     <section class="prompt-section">
-      <form id="askForm" class="prompt-form">
+      <form id="askForm" class="prompt-form" novalidate>
+        <label class="sr-only" for="questionInput">Your yes or no question</label>
         <div class="prompt-input-wrap">
-          <span class="prompt-symbol">&gt;</span>
+          <span class="prompt-symbol" aria-hidden="true">&gt;</span>
           <input
             type="text"
             id="questionInput"
+            name="question"
             class="prompt-input"
-            placeholder="ask the oracle a yes/no question..."
+            placeholder="ask the oracle a yes/no question…"
             maxlength="300"
             autocomplete="off"
+            autocapitalize="sentences"
             spellcheck="false"
-          />
+            aria-describedby="inputHint"
+          >
           <button type="submit" id="submitBtn" class="btn btn-ask">
             <span id="btnText">consult</span>
-            <span class="spinner" id="btnSpinner"></span>
+            <span class="spinner" id="btnSpinner" aria-hidden="true"></span>
           </button>
         </div>
       </form>
+      <p id="inputHint" class="input-hint"><span id="charCount">0</span>/300 · <kbd>/</kbd> to focus · <kbd>enter</kbd> to ask</p>
 
-      <!-- Quick Suggestion Pills -->
       <div class="quick-prompts">
         <span class="quick-label">suggest:</span>
-        <button class="quick-pill" data-q="Will this code deploy cleanly to production?">deploy cleanly?</button>
-        <button class="quick-pill" data-q="Should I rewrite the stack in Rust?">rewrite in rust?</button>
-        <button class="quick-pill" data-q="Is tomorrow going to be a productive day?">productive day?</button>
-        <button class="quick-pill" data-q="Will my current venture succeed?">venture success?</button>
+        <button class="quick-pill" type="button" data-q="Will this code deploy cleanly to production?">deploy cleanly?</button>
+        <button class="quick-pill" type="button" data-q="Should I rewrite the stack in Rust?">rewrite in rust?</button>
+        <button class="quick-pill" type="button" data-q="Is tomorrow going to be a productive day?">productive day?</button>
+        <button class="quick-pill" type="button" data-q="Will my current venture succeed?">venture success?</button>
       </div>
     </section>
 
-    <!-- Telemetry & Decision Details -->
+    <!-- Decision telemetry -->
     <section class="telemetry-card" id="telemetryCard">
       <div class="telemetry-header">
         <span class="telemetry-title">// JEV DECISION TELEMETRY</span>
         <span class="telemetry-badge" id="telemetryBadge">IDLE</span>
       </div>
-
       <div class="telemetry-body">
+        <p class="verdict" id="tVerdict" aria-live="polite">awaiting a question</p>
+
         <div class="telemetry-row">
-          <span class="t-label">VERDICT:</span>
-          <span class="t-val" id="tVerdict">—</span>
-        </div>
-        <div class="telemetry-row">
-          <span class="t-label">P(FAVORABLE):</span>
+          <span class="t-label">P(FAVORABLE)</span>
           <span class="t-val mono" id="tNoul">—</span>
         </div>
-        <div class="telemetry-meter-bar">
+        <div class="telemetry-meter-bar" role="presentation">
           <div class="meter-fill" id="noulFill"></div>
         </div>
 
         <div class="telemetry-grid">
           <div class="t-cell">
-            <span class="t-cell-label">CONFIDENCE</span>
+            <span class="t-cell-label">confidence</span>
             <span class="t-cell-val" id="tConfidence">—</span>
           </div>
           <div class="t-cell">
-            <span class="t-cell-label">LATENCY</span>
+            <span class="t-cell-label">latency</span>
             <span class="t-cell-val" id="tLatency">—</span>
           </div>
           <div class="t-cell">
-            <span class="t-cell-label">ENGINE</span>
+            <span class="t-cell-label">engine</span>
             <span class="t-cell-val">TypeSafe Jev</span>
           </div>
           <div class="t-cell">
-            <span class="t-cell-label">EST. COST</span>
+            <span class="t-cell-label">est. cost</span>
             <span class="t-cell-val" id="tCost">—</span>
           </div>
         </div>
 
-        <!-- Collapsible Raw JSON -->
         <details class="telemetry-details">
           <summary class="details-summary">&gt; inspect raw decision payload</summary>
-          <pre class="json-dump" id="jsonDump">// Awaiting query...</pre>
+          <pre class="json-dump" id="jsonDump">// awaiting query…</pre>
         </details>
       </div>
     </section>
 
-    <!-- Query History -->
+    <!-- Query log -->
     <section class="history-section">
       <div class="history-header">
         <h2>query log</h2>
         <span id="historyCount" class="history-count">0 queries</span>
       </div>
-      <ul id="historyList" class="history-list">
-        <!-- Dynamic items -->
-      </ul>
+      <ul id="historyList" class="history-list" aria-live="polite"></ul>
+      <p class="history-empty" id="historyEmpty">No questions asked yet. History stays in this browser.</p>
     </section>
+
+    <footer class="footer">
+      <span>jev8ball · TypeSafe Jev on OpenRouter</span>
+      <span class="footer-note">Verdicts are synthetic. Do not use them for real decisions.</span>
+    </footer>
   </main>
 
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script src="/js/app.js"></script>
+  <script type="module" src="/js/app.js"></script>
 </body>
 </html>

@@ -1,468 +1,464 @@
 /**
- * jev8ball // Neural Decision Oracle Client
- * Pure vanilla ES6+, HTML5 Canvas, Web Audio API
+ * jev8ball client.
+ *
+ * Wires the DOM to the software-rendered 3D stage, the Jev decisions endpoint, the
+ * telemetry readout, the local query log, and the procedural audio. Everything is a
+ * small number of pure-ish helpers plus one async orchestration function so the
+ * failure modes stay readable.
  */
+import { OracleAudio } from './audio.js';
+import { OracleBall } from './ball3d.js';
+import { ParticleField } from './particles.js';
 
-(function () {
-  'use strict';
+const MAX_HISTORY = 25;
+const QUESTION_LIMIT = 300;
+const HISTORY_KEY = 'jev_history';
+const MUTED_KEY = 'jev_muted';
+const MOTION_KEY = 'jev_motion';
+const SENTIMENTS = ['affirmative', 'negative', 'neutral'];
 
-  // ─── AMBIENT PARTICLES (katdrop style) ───
-  const canvas = document.getElementById('particles');
-  const ctx = canvas.getContext('2d');
-  let particles = [];
+const TONE_HEX = {
+  affirmative: '#10b981',
+  negative: '#ef4444',
+  neutral: '#38bdf8',
+  offline: '#8f8f96',
+  idle: '#38bdf8'
+};
 
-  function resizeCanvas() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+const STAGE_HINTS = {
+  idle: 'click the vessel to shake it',
+  rolling: 'the oracle is considering…',
+  ready: 'click again for another question',
+  error: 'the oracle could not be reached — try again'
+};
+
+const byId = (id) => document.getElementById(id);
+
+const dom = {
+  canvas: byId('oracleCanvas'),
+  rollButton: byId('rollButton'),
+  stageHint: byId('stageHint'),
+  form: byId('askForm'),
+  input: byId('questionInput'),
+  submit: byId('submitBtn'),
+  soundToggle: byId('soundToggle'),
+  motionToggle: byId('motionToggle'),
+  backendStatus: byId('backendStatus'),
+  statusText: byId('statusText'),
+  charCount: byId('charCount'),
+  card: byId('telemetryCard'),
+  badge: byId('telemetryBadge'),
+  verdict: byId('tVerdict'),
+  noul: byId('tNoul'),
+  noulFill: byId('noulFill'),
+  confidence: byId('tConfidence'),
+  latency: byId('tLatency'),
+  cost: byId('tCost'),
+  json: byId('jsonDump'),
+  historyList: byId('historyList'),
+  historyCount: byId('historyCount'),
+  historyEmpty: byId('historyEmpty'),
+  toast: byId('toast'),
+  particles: byId('particles')
+};
+
+const audio = new OracleAudio(MUTED_KEY);
+const particles = new ParticleField(dom.particles);
+const ball = new OracleBall(dom.canvas, { reducedMotion: prefersReducedMotion() });
+
+let busy = false;
+let history = loadHistory();
+let toastTimer = 0;
+
+function prefersReducedMotion() {
+  return typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    : false;
+}
+
+function storedMotionPreference() {
+  try {
+    const stored = localStorage.getItem(MOTION_KEY);
+    if (stored === 'reduce') return true;
+    if (stored === 'full') return false;
+  } catch (e) {
+    /* storage unavailable: fall back to the media query */
   }
-  window.addEventListener('resize', resizeCanvas);
-  resizeCanvas();
+  return prefersReducedMotion();
+}
 
-  class Particle {
-    constructor() {
-      this.reset();
-    }
-    reset() {
-      this.x = Math.random() * canvas.width;
-      this.y = Math.random() * canvas.height;
-      this.size = Math.random() * 1.5 + 0.5;
-      this.speedX = (Math.random() - 0.5) * 0.25;
-      this.speedY = (Math.random() - 0.5) * 0.25;
-      this.alpha = Math.random() * 0.35 + 0.1;
-    }
-    update() {
-      this.x += this.speedX;
-      this.y += this.speedY;
-      if (this.x < 0 || this.x > canvas.width || this.y < 0 || this.y > canvas.height) {
-        this.reset();
+function setHint(key) {
+  dom.stageHint.textContent = STAGE_HINTS[key] || STAGE_HINTS.idle;
+}
+
+function showToast(message, kind = 'info', duration = 2400) {
+  clearTimeout(toastTimer);
+  dom.toast.textContent = message;
+  dom.toast.dataset.kind = kind;
+  dom.toast.classList.add('active');
+  toastTimer = setTimeout(() => dom.toast.classList.remove('active'), duration);
+}
+
+function setBusy(next) {
+  busy = next;
+  document.body.dataset.busy = String(next);
+  dom.submit.disabled = next;
+  dom.input.disabled = next;
+  dom.rollButton.disabled = next;
+  for (const pill of document.querySelectorAll('.quick-pill')) pill.disabled = next;
+}
+
+/** Reads the log defensively: a stale or hand-edited value must never break the page. */
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (item) => item && typeof item.question === 'string' && typeof item.answer === 'string'
+      )
+      .slice(0, MAX_HISTORY)
+      .map((item) => ({
+        question: item.question,
+        answer: item.answer,
+        sentiment: SENTIMENTS.includes(item.sentiment) ? item.sentiment : 'neutral',
+        timestamp: typeof item.timestamp === 'string' ? item.timestamp : '',
+        offline: Boolean(item.offline)
+      }));
+  } catch (e) {
+    return [];
+  }
+}
+
+function persistHistory() {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  } catch (e) {
+    /* quota or private mode: keep the in-memory log */
+  }
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderHistory() {
+  dom.historyList.innerHTML = '';
+  dom.historyCount.textContent = `${history.length} ${history.length === 1 ? 'query' : 'queries'}`;
+  dom.historyEmpty.hidden = history.length > 0;
+
+  history.forEach((item) => {
+    const li = document.createElement('li');
+    li.className = 'history-item';
+    li.tabIndex = 0;
+    li.setAttribute('role', 'button');
+    li.title = 'Copy this fortune';
+    li.innerHTML =
+      '<div class="history-left">' +
+      `<div class="history-q">${escapeHtml(item.question)}</div>` +
+      `<div class="history-time">${escapeHtml(item.timestamp)}${item.offline ? ' · offline' : ''}</div>` +
+      '</div>' +
+      `<div class="history-pill ${item.sentiment}">${escapeHtml(item.answer)}</div>`;
+
+    const copy = () => copyFortune(item);
+    li.addEventListener('click', copy);
+    li.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        copy();
       }
-    }
-    draw() {
-      ctx.fillStyle = `rgba(255, 255, 255, ${this.alpha})`;
-      ctx.fillRect(this.x, this.y, this.size, this.size);
-    }
+    });
+    dom.historyList.appendChild(li);
+  });
+}
+
+async function copyFortune(item) {
+  const text = `Q: ${item.question}\nA: ${item.answer}`;
+  try {
+    await navigator.clipboard.writeText(text);
+    audio.blip();
+    showToast('copied fortune to clipboard');
+  } catch (e) {
+    showToast('clipboard unavailable in this browser', 'warn');
   }
+}
 
-  function initParticles(count = 45) {
-    particles = Array.from({ length: count }, () => new Particle());
+function pushHistory(entry) {
+  history.unshift(entry);
+  if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
+  persistHistory();
+  renderHistory();
+}
+
+/* ─── telemetry ─── */
+
+function toneFor(data) {
+  if (data.offline) return 'offline';
+  return SENTIMENTS.includes(data.sentiment) ? data.sentiment : 'neutral';
+}
+
+function setPending() {
+  dom.card.dataset.tone = 'pending';
+  dom.badge.className = 'telemetry-badge';
+  dom.badge.textContent = 'QUERYING';
+  dom.verdict.textContent = 'the oracle is considering your question…';
+  dom.noul.textContent = '—';
+  dom.noulFill.className = 'meter-fill';
+  dom.noulFill.style.width = '0%';
+  dom.confidence.textContent = '—';
+  dom.latency.textContent = '—';
+  dom.cost.textContent = '—';
+  dom.json.textContent = '// awaiting decision…';
+}
+
+function presentError(error) {
+  dom.card.dataset.tone = 'error';
+  dom.badge.className = 'telemetry-badge error';
+  dom.badge.textContent = 'ERROR';
+  dom.verdict.textContent = error && error.message ? error.message : 'the request failed';
+  dom.noul.textContent = '—';
+  dom.noulFill.className = 'meter-fill';
+  dom.noulFill.style.width = '0%';
+  dom.confidence.textContent = '—';
+  dom.latency.textContent = '—';
+  dom.cost.textContent = '—';
+  dom.json.textContent = '// no decision payload';
+  setHint('error');
+}
+
+function present(data) {
+  const tone = toneFor(data);
+  const offline = tone === 'offline';
+
+  ball.answer(data.answer || 'Cannot predict now', tone);
+  audio.reveal(offline ? 'neutral' : tone);
+  particles.setTone(TONE_HEX[tone]);
+  setHint('ready');
+
+  dom.card.dataset.tone = tone;
+  dom.badge.className = `telemetry-badge ${tone}`;
+  dom.badge.textContent = offline ? 'OFFLINE' : tone.toUpperCase();
+  dom.verdict.textContent = data.answer || '—';
+
+  // An offline verdict is a local hash guess: never dress it up as a calibrated one.
+  dom.noul.textContent = offline
+    ? '—'
+    : typeof data.noul === 'number'
+      ? data.noul.toFixed(2)
+      : '0.50';
+  dom.noulFill.className = `meter-fill ${offline ? '' : tone}`.trim();
+  dom.noulFill.style.width = offline ? '0%' : `${Math.round((data.noul || 0.5) * 100)}%`;
+  dom.confidence.textContent = offline
+    ? '—'
+    : `${Math.round((data.confidence || 0.8) * 100)}%`;
+  dom.latency.textContent = `${data.latency || 0}ms`;
+  dom.cost.textContent = offline
+    ? '—'
+    : typeof data.cost === 'number' && data.cost > 0
+      ? `$${data.cost.toFixed(6)}`
+      : '< $0.0001';
+  dom.json.textContent = stringify(data.raw || data);
+
+  pushHistory({
+    question: data.question,
+    answer: data.answer,
+    sentiment: offline ? 'neutral' : tone,
+    offline,
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  });
+
+  if (offline) showToast('offline guess — the oracle could not be reached', 'warn', 3200);
+}
+
+function stringify(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (e) {
+    return '// payload could not be serialised';
   }
-  initParticles();
+}
 
-  function animateParticles() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    for (const p of particles) {
-      p.update();
-      p.draw();
-    }
-    requestAnimationFrame(animateParticles);
+/* ─── orchestration ─── */
+
+function updateCharCount() {
+  dom.charCount.textContent = String(dom.input.value.length);
+}
+
+function submitQuestion(raw) {
+  if (busy) return;
+  const question = String(raw || '').trim().slice(0, QUESTION_LIMIT);
+  if (!question) {
+    showToast('type a question first', 'warn');
+    dom.input.focus();
+    return;
   }
-  requestAnimationFrame(animateParticles);
+  dom.input.value = question;
+  updateCharCount();
+  ask(question);
+}
 
-  // ─── AUDIO SYNTHESIZER ───
-  class OracleAudio {
-    constructor() {
-      this.ctx = null;
-      this.muted = localStorage.getItem('jev_muted') === 'true';
-    }
-    init() {
-      if (!this.ctx) {
-        const AC = window.AudioContext || window.webkitAudioContext;
-        if (AC) this.ctx = new AC();
-      }
-      if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
-    }
-    toggleMute() {
-      this.muted = !this.muted;
-      localStorage.setItem('jev_muted', this.muted);
-      return this.muted;
-    }
-    playTone(freq, type = 'sine', duration = 0.1, vol = 0.1) {
-      if (this.muted) return;
-      try {
-        this.init();
-        if (!this.ctx) return;
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
-        osc.type = type;
-        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-        gain.gain.setValueAtTime(vol, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
-        osc.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start();
-        osc.stop(this.ctx.currentTime + duration);
-      } catch (e) {}
-    }
-    rollSound() {
-      if (this.muted) return;
-      try {
-        this.init();
-        if (!this.ctx) return;
-        // Whirring resonant gyroscopic roll sweep
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(60, this.ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(240, this.ctx.currentTime + 0.4);
-        osc.frequency.exponentialRampToValueAtTime(95, this.ctx.currentTime + 1.1);
+async function ask(question) {
+  setBusy(true);
+  setPending();
+  setHint('rolling');
+  audio.roll(ball.rollDuration);
+  const roll = ball.roll();
 
-        const filter = this.ctx.createBiquadFilter();
-        filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(450, this.ctx.currentTime);
-        filter.frequency.linearRampToValueAtTime(900, this.ctx.currentTime + 0.5);
-        filter.frequency.linearRampToValueAtTime(300, this.ctx.currentTime + 1.1);
+  try {
+    const response = await fetch('/api/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question })
+    });
 
-        gain.gain.setValueAtTime(0.08, this.ctx.currentTime);
-        gain.gain.linearRampToValueAtTime(0.16, this.ctx.currentTime + 0.35);
-        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 1.15);
-
-        osc.connect(filter);
-        filter.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start();
-        osc.stop(this.ctx.currentTime + 1.15);
-      } catch (e) {}
-    }
-    revealChime(sentiment = 'affirmative') {
-      if (this.muted) return;
-      if (sentiment === 'affirmative') {
-        this.playTone(440, 'triangle', 0.12, 0.15);
-        setTimeout(() => this.playTone(554.37, 'triangle', 0.15, 0.15), 80);
-        setTimeout(() => this.playTone(659.25, 'triangle', 0.25, 0.18), 160);
-      } else if (sentiment === 'negative') {
-        this.playTone(329.63, 'sawtooth', 0.14, 0.12);
-        setTimeout(() => this.playTone(277.18, 'sawtooth', 0.22, 0.14), 100);
-      } else {
-        this.playTone(392.00, 'sine', 0.18, 0.14);
-        setTimeout(() => this.playTone(440.00, 'sine', 0.22, 0.14), 110);
-      }
-    }
-  }
-  const audio = new OracleAudio();
-
-  // ─── DOM ELEMENTS ───
-  const ballWrapper = document.getElementById('ballWrapper');
-  const ballSphere = document.getElementById('ballSphere');
-  const ballShadow = document.getElementById('ballShadow');
-  const floatingDie = document.getElementById('floatingDie');
-  const dieText = document.getElementById('dieText');
-  const askForm = document.getElementById('askForm');
-  const questionInput = document.getElementById('questionInput');
-  const submitBtn = document.getElementById('submitBtn');
-  const btnText = document.getElementById('btnText');
-  const btnSpinner = document.getElementById('btnSpinner');
-  const soundToggle = document.getElementById('soundToggle');
-  const backendStatus = document.getElementById('backendStatus');
-  const statusText = document.getElementById('statusText');
-
-  const telemetryCard = document.getElementById('telemetryCard');
-  const telemetryBadge = document.getElementById('telemetryBadge');
-  const tVerdict = document.getElementById('tVerdict');
-  const tNoul = document.getElementById('tNoul');
-  const noulFill = document.getElementById('noulFill');
-  const tConfidence = document.getElementById('tConfidence');
-  const tLatency = document.getElementById('tLatency');
-  const tCost = document.getElementById('tCost');
-  const jsonDump = document.getElementById('jsonDump');
-
-  const historyList = document.getElementById('historyList');
-  const historyCount = document.getElementById('historyCount');
-  const toast = document.getElementById('toast');
-
-  let isSubmitting = false;
-  let historyData = loadHistory();
-
-  // Read the stored log defensively: a stale, hand-edited or truncated value must never
-  // break the interface, so anything that is not a well formed entry is dropped.
-  function loadHistory() {
-    const sentiments = ['affirmative', 'negative', 'neutral'];
+    let payload = null;
     try {
-      const saved = localStorage.getItem('jev_history');
-      if (!saved) return [];
-      const parsed = JSON.parse(saved);
-      if (!Array.isArray(parsed)) return [];
-      return parsed
-        .filter(
-          (item) => item && typeof item.question === 'string' && typeof item.answer === 'string'
-        )
-        .slice(0, 25)
-        .map((item) => ({
-          question: item.question,
-          answer: item.answer,
-          sentiment: sentiments.includes(item.sentiment) ? item.sentiment : 'neutral',
-          timestamp: typeof item.timestamp === 'string' ? item.timestamp : ''
-        }));
+      payload = await response.json();
     } catch (e) {
-      return [];
+      payload = null;
     }
-  }
 
-  // ─── SOUND TOGGLE ───
-  function updateSoundUI() {
-    soundToggle.textContent = audio.muted ? 'sound: off' : 'sound: on';
-  }
-  updateSoundUI();
-  soundToggle.addEventListener('click', () => {
-    audio.toggleMute();
-    updateSoundUI();
-    showToast(audio.muted ? 'Audio muted' : 'Audio enabled');
-  });
-
-  // ─── TOAST NOTIFICATION ───
-  let toastTimer = null;
-  function showToast(msg) {
-    clearTimeout(toastTimer);
-    toast.textContent = msg;
-    toast.classList.add('active');
-    toastTimer = setTimeout(() => {
-      toast.classList.remove('active');
-    }, 2200);
-  }
-
-  // ─── 3D PARALLAX TILT ON HOVER ───
-  window.addEventListener('pointermove', (e) => {
-    if (isSubmitting) return;
-    const rect = ballWrapper.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-    const deltaX = (e.clientX - centerX) / (window.innerWidth / 2);
-    const deltaY = (e.clientY - centerY) / (window.innerHeight / 2);
-
-    const tiltX = Math.max(-14, Math.min(14, -deltaY * 16));
-    const tiltY = Math.max(-14, Math.min(14, deltaX * 16));
-
-    ballSphere.style.transform = `rotateX(${tiltX}deg) rotateY(${tiltY}deg)`;
-  });
-
-  ballWrapper.addEventListener('mouseleave', () => {
-    if (!isSubmitting) {
-      ballSphere.style.transform = 'rotateX(0deg) rotateY(0deg)';
+    // A non-OK status is only usable when the backend shipped a fallback with it.
+    if (!response.ok && !(payload && payload.fallback)) {
+      throw new Error((payload && payload.error) || `oracle returned HTTP ${response.status}`);
     }
-  });
+    if (!payload) throw new Error('oracle returned an empty response');
 
-  // Clicking hexagonal figure rolls it if input is non-empty, or prompts user
-  ballWrapper.addEventListener('click', () => {
-    if (isSubmitting) return;
-    if (questionInput.value.trim()) {
-      handleAsk(questionInput.value.trim());
-    } else {
-      questionInput.focus();
-      showToast('Type a question to consult Jev');
-    }
-  });
+    await roll;
+    present(payload.fallback ? { ...payload.fallback, question } : payload);
+  } catch (error) {
+    await roll; // let the shake finish so the interface never snaps
+    console.error('oracle request failed:', error);
+    audio.error();
+    presentError(error);
+    showToast((error && error.message) || 'request failed', 'error', 3200);
+  } finally {
+    setBusy(false);
+  }
+}
 
-  // ─── STATUS CHECK ───
-  async function checkStatus() {
+async function checkStatus() {
+  try {
+    const response = await fetch('/api/status', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    dom.backendStatus.classList.remove('online', 'offline', 'degraded');
+    dom.backendStatus.classList.add(data.hasKey === false ? 'degraded' : 'online');
+    dom.statusText.textContent = data.model || 'online';
+    dom.backendStatus.title = `key: ${data.keySource || 'unknown'} — click to re-check`;
+  } catch (error) {
+    dom.backendStatus.classList.remove('online', 'degraded');
+    dom.backendStatus.classList.add('offline');
+    dom.statusText.textContent = 'backend offline';
+    dom.backendStatus.title = 'Backend unreachable — click to retry';
+  }
+}
+
+/* ─── preferences ─── */
+
+let reducedMotion = storedMotionPreference();
+
+function applyMotion(reduced, { persist = true, announce = false } = {}) {
+  reducedMotion = reduced;
+  document.body.dataset.motion = reduced ? 'reduced' : 'full';
+  dom.motionToggle.textContent = reduced ? 'motion: reduced' : 'motion: full';
+  dom.motionToggle.setAttribute('aria-pressed', String(reduced));
+  ball.setReducedMotion(reduced);
+  if (persist) {
     try {
-      const res = await fetch('/api/status');
-      if (res.ok) {
-        const data = await res.json();
-        backendStatus.classList.add('online');
-        statusText.textContent = data.model;
-      } else {
-        backendStatus.classList.remove('online');
-        statusText.textContent = 'status error';
-      }
+      localStorage.setItem(MOTION_KEY, reduced ? 'reduce' : 'full');
     } catch (e) {
-      backendStatus.classList.remove('online');
-      statusText.textContent = 'offline';
+      /* private mode: preference applies for this session only */
     }
   }
-  checkStatus();
-  backendStatus.addEventListener('click', () => {
-    showToast('Checking Jev backend status...');
+  if (announce) showToast(reduced ? 'animation reduced' : 'animation restored');
+}
+
+/* ─── wiring ─── */
+
+function wire() {
+  dom.form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    submitQuestion(dom.input.value);
+  });
+
+  // The vessel itself acts as the submit button for the current question.
+  dom.rollButton.addEventListener('click', () => submitQuestion(dom.input.value));
+
+  dom.input.addEventListener('input', updateCharCount);
+
+  for (const pill of document.querySelectorAll('.quick-pill')) {
+    pill.addEventListener('click', () => submitQuestion(pill.dataset.q));
+  }
+
+  dom.soundToggle.addEventListener('click', () => {
+    const muted = audio.toggleMute();
+    dom.soundToggle.textContent = muted ? 'sound: off' : 'sound: on';
+    dom.soundToggle.setAttribute('aria-pressed', String(muted));
+    if (!muted) audio.blip();
+    showToast(muted ? 'audio muted' : 'audio enabled');
+  });
+
+  dom.motionToggle.addEventListener('click', () =>
+    applyMotion(!reducedMotion, { announce: true })
+  );
+
+  dom.backendStatus.addEventListener('click', () => {
+    dom.statusText.textContent = 'checking…';
     checkStatus();
   });
 
-  // ─── QUICK PROMPTS ───
-  document.querySelectorAll('.quick-pill').forEach(pill => {
-    pill.addEventListener('click', () => {
-      if (isSubmitting) return;
-      const q = pill.getAttribute('data-q');
-      questionInput.value = q;
-      handleAsk(q);
-    });
+  document.addEventListener('keydown', (event) => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const typing = event.target instanceof HTMLInputElement;
+    if (event.key === '/' && !typing) {
+      event.preventDefault();
+      dom.input.focus();
+    } else if (event.key === 'r' && !typing && !busy) {
+      event.preventDefault();
+      submitQuestion(dom.input.value);
+    } else if (event.key === 'Escape' && typing) {
+      event.target.blur();
+    }
   });
 
-  // ─── FORM SUBMISSION ───
-  askForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const q = questionInput.value.trim();
-    if (q) handleAsk(q);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) particles.stop();
+    else particles.start();
   });
 
-  async function handleAsk(question) {
-    if (isSubmitting) return;
-    isSubmitting = true;
-
-    // UI Loading state
-    submitBtn.disabled = true;
-    questionInput.disabled = true;
-    btnText.style.display = 'none';
-    btnSpinner.style.display = 'inline-block';
-
-    // 1. Roll Hexagonal Figure in Place & Submerge Die
-    ballSphere.classList.add('rolling');
-    if (ballShadow) ballShadow.classList.add('rolling-shadow');
-    floatingDie.className = 'floating-die submerged';
-    audio.rollSound();
-
-    const minRollTime = new Promise(resolve => setTimeout(resolve, 1250));
-
-    try {
-      // 2. Call /api/ask
-      const apiCall = fetch('/api/ask', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question })
-      }).then(async (response) => {
-        let payload = null;
-        try {
-          payload = await response.json();
-        } catch (e) {
-          payload = null;
-        }
-        // A non-OK status is only usable when the backend shipped a fallback with it.
-        if (!response.ok && !(payload && payload.fallback)) {
-          throw new Error(
-            (payload && payload.error) || `Oracle returned HTTP ${response.status}`
-          );
-        }
-        return payload;
-      });
-
-      const [_, result] = await Promise.all([minRollTime, apiCall]);
-
-      // Remove rolling classes
-      ballSphere.classList.remove('rolling');
-      if (ballShadow) ballShadow.classList.remove('rolling-shadow');
-      ballSphere.style.transform = 'rotateX(0deg) rotateY(0deg)';
-
-      if (!result) {
-        throw new Error('Oracle returned an empty response.');
+  if (typeof window.matchMedia === 'function') {
+    const query = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const onChange = (event) => {
+      let overridden = false;
+      try {
+        overridden = Boolean(localStorage.getItem(MOTION_KEY));
+      } catch (e) {
+        overridden = false;
       }
-
-      if (result.error && !result.fallback) {
-        showToast(result.error || 'Decision failed');
-        dieText.innerHTML = 'CANNOT<br>PREDICT';
-        floatingDie.className = 'floating-die surfacing';
-        return;
-      }
-
-      const data = result.fallback ? { ...result.fallback, question } : result;
-      displayOracleAnswer(data);
-
-    } catch (err) {
-      console.error('Request failed:', err);
-      ballSphere.classList.remove('rolling');
-      if (ballShadow) ballShadow.classList.remove('rolling-shadow');
-      ballSphere.style.transform = 'rotateX(0deg) rotateY(0deg)';
-      // Never show an affirmative prophecy for a request that failed.
-      dieText.innerHTML = 'CANNOT<br>PREDICT';
-      floatingDie.className = 'floating-die surfacing';
-      telemetryBadge.className = 'telemetry-badge neutral';
-      telemetryBadge.textContent = 'ERROR';
-      showToast(err && err.message ? err.message : 'Request failed. Please retry.');
-    } finally {
-      isSubmitting = false;
-      submitBtn.disabled = false;
-      questionInput.disabled = false;
-      btnText.style.display = 'inline';
-      btnSpinner.style.display = 'none';
-      questionInput.focus();
-    }
+      if (!overridden) applyMotion(event.matches, { persist: false });
+    };
+    if (query.addEventListener) query.addEventListener('change', onChange);
+    else if (query.addListener) query.addListener(onChange);
   }
+}
 
-  function displayOracleAnswer(data) {
-    const formattedText = String(data.answer || 'Cannot predict now')
-      .replace(/\s+/g, ' ')
-      .toUpperCase();
-    const words = formattedText.split(' ');
-    let htmlAnswer = formattedText;
-    if (words.length > 2) {
-      const mid = Math.ceil(words.length / 2);
-      htmlAnswer = words.slice(0, mid).join(' ') + '<br>' + words.slice(mid).join(' ');
-    }
-
-    dieText.innerHTML = htmlAnswer;
-    floatingDie.className = 'floating-die surfacing';
-
-    // Audio chime
-    audio.revealChime(data.sentiment);
-
-    // Update Telemetry. An offline fallback is a local hash guess, so it is labelled and
-    // must not be shown with the calibrated probability and confidence of a real decision.
-    const offline = Boolean(data.offline);
-    const sentiment = offline ? 'neutral' : (data.sentiment || 'neutral');
-    telemetryBadge.className = `telemetry-badge ${offline ? 'offline' : sentiment}`;
-    telemetryBadge.textContent = offline ? 'OFFLINE' : sentiment.toUpperCase();
-
-    tVerdict.textContent = data.answer;
-    tNoul.textContent = offline ? '—' : (data.noul !== undefined ? data.noul.toFixed(2) : '0.50');
-
-    noulFill.className = `meter-fill ${sentiment}`;
-    noulFill.style.width = offline ? '0%' : `${Math.round((data.noul || 0.5) * 100)}%`;
-
-    tConfidence.textContent = offline ? '—' : `${Math.round((data.confidence || 0.8) * 100)}%`;
-    tLatency.textContent = `${data.latency || 320}ms`;
-    tCost.textContent = offline ? '—' : data.cost ? `$${data.cost.toFixed(6)}` : '< $0.0001';
-
-    jsonDump.textContent = JSON.stringify(data.raw || data, null, 2);
-
-    // Append to History
-    addHistoryItem({
-      question: data.question,
-      answer: data.answer,
-      sentiment: data.sentiment,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    });
-
-    if (offline) showToast('Offline guess — the oracle could not be reached');
-  }
-
-  function addHistoryItem(item) {
-    historyData.unshift(item);
-    if (historyData.length > 25) historyData.pop();
-    try {
-      localStorage.setItem('jev_history', JSON.stringify(historyData));
-    } catch (e) {}
-    renderHistory();
-  }
-
-  function renderHistory() {
-    historyList.innerHTML = '';
-    historyCount.textContent = `${historyData.length} ${historyData.length === 1 ? 'query' : 'queries'}`;
-
-    historyData.forEach((item, idx) => {
-      const li = document.createElement('li');
-      li.className = 'history-item';
-      li.innerHTML = `
-        <div class="history-left">
-          <div class="history-q" title="${escapeHtml(item.question)}">${escapeHtml(item.question)}</div>
-          <div class="history-time">${item.timestamp}</div>
-        </div>
-        <div class="history-pill ${item.sentiment}">
-          ${escapeHtml(item.answer)}
-        </div>
-      `;
-      li.style.cursor = 'pointer';
-      li.addEventListener('click', () => {
-        navigator.clipboard.writeText(`Q: ${item.question}\nA: ${item.answer}`).then(() => {
-          showToast('Copied fortune to clipboard');
-        });
-      });
-      historyList.appendChild(li);
-    });
-  }
-
-  function escapeHtml(value) {
-    return String(value ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
-
+function init() {
+  applyMotion(storedMotionPreference(), { persist: false });
+  ball.attach();
+  particles.setTone(TONE_HEX.idle);
+  particles.start();
   renderHistory();
+  updateCharCount();
+  setHint('idle');
+  wire();
+  checkStatus();
+}
 
-})();
+init();

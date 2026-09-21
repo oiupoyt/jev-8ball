@@ -1,20 +1,28 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const path = require('path');
+import 'dotenv/config';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import cors from 'cors';
+import express from 'express';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.disable('x-powered-by');
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+
+// The repo intentionally carries a key so a fresh clone (or deploy) works with no
+// secret configured. Delete this constant and set OPENROUTER_API_KEY to require one.
+const REPO_API_KEY = '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';
+
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || REPO_API_KEY;
 const JEV_DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions';
 const MODEL = 'typesafe/jev-1.13';
+const LAYA_API_URL = process.env.LAYA_API_URL || 'http://192.168.0.103:8888';
 
-if (!OPENROUTER_API_KEY) {
-  console.warn(
-    '[jev-8ball] OPENROUTER_API_KEY is not set — /api/ask will answer 503. Add it to .env (see .env.example).'
-  );
+if (!process.env.OPENROUTER_API_KEY) {
+  console.warn('[jev-8ball] OPENROUTER_API_KEY is not set — using the in-repo key.');
 }
 
 app.use(cors());
@@ -48,12 +56,31 @@ const APHORISMS = {
 };
 
 // GET /api/status
-app.get('/api/status', (req, res) => {
+app.get('/api/status', async (req, res) => {
+  let layaOnline = false;
+  let layaData = null;
+
+  try {
+    const layaRes = await fetch(`${LAYA_API_URL}/api/status`, {
+      signal: AbortSignal.timeout(1200)
+    });
+    if (layaRes.ok) {
+      layaData = await layaRes.json();
+      layaOnline = Boolean(layaData.status === 'online' || layaData.ready);
+    }
+  } catch (err) {
+    layaOnline = false;
+  }
+
   res.json({
     status: 'online',
-    model: MODEL,
-    engine: 'TypeSafe Jev (Non-autoregressive System One)',
-    hasKey: Boolean(OPENROUTER_API_KEY)
+    model: layaOnline ? (layaData?.model || 'convaiinnovations/laya-typed-decisions') : MODEL,
+    engine: layaOnline ? 'Laya System 1 Decision Model (Android Tablet)' : 'TypeSafe Jev (Cloud Decision Engine)',
+    tablet: layaOnline,
+    layaUrl: LAYA_API_URL,
+    layaInfo: layaData,
+    hasKey: Boolean(OPENROUTER_API_KEY),
+    keySource: process.env.OPENROUTER_API_KEY ? 'env' : 'repo'
   });
 });
 
@@ -70,6 +97,44 @@ app.post('/api/ask', async (req, res) => {
 
   const cleanQuestion = question.trim().slice(0, 300);
   const startTime = performance.now();
+
+  // 1. Attempt inference on Android Tablet running Laya System 1
+  try {
+    const layaRes = await fetch(`${LAYA_API_URL}/api/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: cleanQuestion }),
+      signal: AbortSignal.timeout(6500)
+    });
+
+    if (layaRes.ok) {
+      const data = await layaRes.json();
+      const latency = Math.round(performance.now() - startTime);
+      return res.json({
+        question: cleanQuestion,
+        answer: data.answer,
+        sentiment: data.sentiment,
+        noul: data.noul,
+        confidence: data.confidence,
+        probabilities: data.probabilities || {},
+        aphorismKey: data.aphorismKey || 'signs_yes',
+        latency,
+        cost: 0,
+        usage: { prompt_tokens: data.raw?.usage?.input_tokens ?? 38, completion_tokens: 0 },
+        model: data.model || 'convaiinnovations/laya-typed-decisions',
+        engine: 'Laya System 1 (Android Tablet ARM64)',
+        tablet: true,
+        raw: data
+      });
+    }
+  } catch (layaErr) {
+    // Graceful fallback to OpenRouter Jev cloud API
+    console.warn(`[jev-8ball] Tablet Laya not reachable (${layaErr.message}), falling back to OpenRouter Jev`);
+  }
+
+  if (!OPENROUTER_API_KEY) {
+    return res.status(503).json({ error: 'Oracle is not configured. Set OPENROUTER_API_KEY.' });
+  }
 
   try {
     const payload = {
@@ -223,5 +288,6 @@ app.use((req, res) => {
 
 app.listen(PORT, () => {
   console.log(`[jev-8ball] Server running at http://localhost:${PORT}`);
-  console.log(`[jev-8ball] Model: ${MODEL} via OpenRouter Decisions API`);
+  console.log(`[jev-8ball] Primary Engine: Laya on Android Tablet (${LAYA_API_URL})`);
+  console.log(`[jev-8ball] Fallback Engine: ${MODEL} via OpenRouter Decisions API`);
 });
