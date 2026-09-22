@@ -5,8 +5,5 @@
   "assets": {
     "directory": "./public",
     "binding": "ASSETS"
-  },
-  "vars": {
-    "LAYA_API_URL": "https://laya-api.oiupoyt.space"
   }
 }
