@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { clipPolygonBelow, wrapAnswer } from '../public/js/ball3d.js';
+import { clipPolygonBelow, inkTransform, wrapAnswer } from '../public/js/ball3d.js';
 import {
   affineFromThreePoints,
   clamp,
@@ -157,6 +157,43 @@ test('plate mesh exposes an ordered answer face for text projection', () => {
     assert.ok(near(vertex[1], point[1]), `y mismatch at ${position}`);
     assert.ok(near(vertex[2], plate.thickness / 2));
   });
+});
+
+test('inkTransform keeps verdict glyphs upright on a face-on plate', () => {
+  const plate = createPlate();
+  const answer = plate.mesh.faces.find((face) => face.kind === 'answer');
+
+  // A face-on plate: local x runs right, local y (up) runs up the screen, so it maps to
+  // negative screen y because canvas y grows downwards.
+  const scale = 100;
+  const centre = 172;
+  const facePoints = answer.indices.map((index) => {
+    const local = plate.mesh.vertices[index];
+    return { x: centre + local[0] * scale, y: centre - local[1] * scale };
+  });
+
+  const matrix = inkTransform(plate.points, facePoints);
+  assert.ok(matrix, 'the text transform must be solvable');
+
+  // A mirrored basis (negative determinant) renders every glyph upside down — the exact
+  // bug this helper exists to prevent.
+  const determinant = matrix[0] * matrix[3] - matrix[1] * matrix[2];
+  assert.ok(determinant > 0, `text basis is mirrored: det = ${determinant}`);
+
+  // Text "right" and text "down" must travel right and down the screen respectively.
+  assert.ok(matrix[0] > 0 && near(matrix[1], 0), `right drifts: (${matrix[0]}, ${matrix[1]})`);
+  assert.ok(matrix[3] > 0 && near(matrix[2], 0), `down drifts: (${matrix[2]}, ${matrix[3]})`);
+
+  // Successive lines are laid out at increasing y, so line two must land below line one.
+  const origin = { x: matrix[4], y: matrix[5] };
+  const secondLine = { x: matrix[2] + matrix[4], y: matrix[3] + matrix[5] };
+  assert.ok(secondLine.y > origin.y, 'later lines must render below earlier ones');
+  assert.equal(secondLine.y - origin.y, scale, 'one text unit must scale uniformly');
+
+  // Collinear local corners cannot define a basis, so the solve must fail loudly rather
+  // than hand the renderer a garbage transform.
+  const collinear = Array.from({ length: 6 }, (_, index) => [index, 0]);
+  assert.equal(inkTransform(collinear, facePoints), null);
 });
 
 test('clipPolygonBelow keeps only the part under the surface line', () => {

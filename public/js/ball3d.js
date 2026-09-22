@@ -586,12 +586,8 @@ export class OracleBall {
     if (dot(face.normal, VIEW) < 0.3) return;
 
     // The face keeps the plate's local vertex order, so three corners are enough to
-    // solve the affine transform from plate-local space into screen space.
-    const corners = [0, 3, 5].map((index) => ({
-      local: this.plate.points[index],
-      screen: [face.points[index].x, face.points[index].y]
-    }));
-    const matrix = affineFromThreePoints(corners[0], corners[1], corners[2]);
+    // solve the affine transform from text space into screen space.
+    const matrix = inkTransform(this.plate.points, face.points);
     if (!matrix) return;
 
     const lines = this.answerLines;
@@ -615,7 +611,9 @@ export class OracleBall {
       this.dpr * matrix[4],
       this.dpr * matrix[5]
     );
-    this._pathFromPoints(this.plate.points.map(([x, y]) => ({ x, y })));
+    // The clip lives in the same y-down text space as the ink, so its y axis is flipped
+    // to match the transform above.
+    this._pathFromPoints(this.plate.points.map(([x, y]) => ({ x, y: -y })));
     ctx.clip();
 
     // Shrink to fit if the monospace metrics run wide of the plate.
@@ -642,6 +640,26 @@ export class OracleBall {
 }
 
 /* ─── helpers (exported for tests) ─── */
+
+/**
+ * Affine map from canvas text space onto a projected plate face, returned as
+ * [a, b, c, d, e, f] for `setTransform`.
+ *
+ * The plate is authored y-up, but canvas text is laid out y-down. Solving the affine
+ * against the raw local points therefore mirrors the basis (negative determinant), which
+ * renders the ink upside down and reverses the line order. Negating the local y axis
+ * first means the result consumes ordinary text coordinates and draws upright glyphs.
+ *
+ * @param {number[][]} platePoints face-local [x, y] pairs, in face winding order
+ * @param {{x: number, y: number}[]} facePoints projected screen points, same order
+ */
+export function inkTransform(platePoints, facePoints) {
+  const corners = [0, 3, 5].map((index) => ({
+    local: [platePoints[index][0], -platePoints[index][1]],
+    screen: [facePoints[index].x, facePoints[index].y]
+  }));
+  return affineFromThreePoints(corners[0], corners[1], corners[2]);
+}
 
 function boundsOf(points) {
   let minX = Infinity;
