@@ -104,7 +104,7 @@ app.post('/api/ask', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: cleanQuestion }),
-      signal: AbortSignal.timeout(6500)
+      signal: AbortSignal.timeout(35000)
     });
 
     if (layaRes.ok) {

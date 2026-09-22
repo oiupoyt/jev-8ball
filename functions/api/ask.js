@@ -67,36 +67,35 @@ export async function onRequestPost(context) {
   const cleanQuestion = question.trim().slice(0, 300);
   const startTime = Date.now();
 
-  if (env.LAYA_API_URL) {
-    try {
-      const layaRes = await fetch(`${env.LAYA_API_URL}/api/ask`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: cleanQuestion }),
-        signal: AbortSignal.timeout(6000)
+  const layaUrl = env.LAYA_API_URL || "https://laya-api.oiupoyt.space";
+  try {
+    const layaRes = await fetch(`${layaUrl}/api/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: cleanQuestion }),
+      signal: AbortSignal.timeout(35000)
+    });
+    if (layaRes.ok) {
+      const data = await layaRes.json();
+      return json({
+        question: cleanQuestion,
+        answer: data.answer,
+        sentiment: data.sentiment,
+        noul: data.noul,
+        confidence: data.confidence,
+        probabilities: data.probabilities || {},
+        aphorismKey: data.aphorismKey || "signs_yes",
+        latency: Date.now() - startTime,
+        cost: 0,
+        usage: { prompt_tokens: data.raw?.usage?.input_tokens ?? 38, completion_tokens: 0 },
+        model: data.model || "convaiinnovations/laya-typed-decisions",
+        engine: "Laya System 1 (Android Tablet)",
+        tablet: true,
+        raw: data
       });
-      if (layaRes.ok) {
-        const data = await layaRes.json();
-        return json({
-          question: cleanQuestion,
-          answer: data.answer,
-          sentiment: data.sentiment,
-          noul: data.noul,
-          confidence: data.confidence,
-          probabilities: data.probabilities || {},
-          aphorismKey: data.aphorismKey || "signs_yes",
-          latency: Date.now() - startTime,
-          cost: 0,
-          usage: { prompt_tokens: data.raw?.usage?.input_tokens ?? 38, completion_tokens: 0 },
-          model: data.model || "convaiinnovations/laya-typed-decisions",
-          engine: "Laya System 1 (Tablet via Tunnel)",
-          tablet: true,
-          raw: data
-        });
-      }
-    } catch (e) {
-      // Fall back to OpenRouter
     }
+  } catch (e) {
+    // Fall back to OpenRouter
   }
 
   try {

@@ -63,10 +63,30 @@ export default {
 
     // GET /api/status
     if (url.pathname === "/api/status") {
+      let layaOnline = false;
+      let layaData = null;
+
+      if (env.LAYA_API_URL) {
+        try {
+          const layaRes = await fetch(`${env.LAYA_API_URL}/api/status`, {
+            signal: AbortSignal.timeout(2500)
+          });
+          if (layaRes.ok) {
+            layaData = await layaRes.json();
+            layaOnline = Boolean(layaData.status === "online" || layaData.ready);
+          }
+        } catch (e) {
+          layaOnline = false;
+        }
+      }
+
       return json({
         status: "online",
-        model: MODEL,
-        engine: "TypeSafe Jev (Cloudflare Edge Worker)",
+        model: layaOnline ? (layaData?.model || "convaiinnovations/laya-typed-decisions") : MODEL,
+        engine: layaOnline ? "Laya System 1 Decision Model (Android Tablet)" : "TypeSafe Jev (Cloudflare Edge Worker)",
+        tablet: layaOnline,
+        layaUrl: env.LAYA_API_URL || null,
+        layaInfo: layaData,
         hasKey: Boolean(resolveApiKey(env)),
         keySource: env.OPENROUTER_API_KEY ? "env" : "repo"
       });
@@ -74,11 +94,6 @@ export default {
 
     // POST /api/ask
     if (url.pathname === "/api/ask" && request.method === "POST") {
-      const apiKey = resolveApiKey(env);
-      if (!apiKey) {
-        return json({ error: "Oracle is not configured. Set the OPENROUTER_API_KEY secret." }, 503);
-      }
-
       let body;
       try {
         body = await request.json();
@@ -94,37 +109,45 @@ export default {
       const cleanQuestion = question.trim().slice(0, 300);
       const startTime = Date.now();
 
-      // Check if tablet Laya URL is configured in Worker environment
+      // 1. Primary Engine: Tablet Laya System 1 if configured in environment
       if (env.LAYA_API_URL) {
         try {
           const layaRes = await fetch(`${env.LAYA_API_URL}/api/ask`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ question: cleanQuestion }),
-            signal: AbortSignal.timeout(6000)
+            signal: AbortSignal.timeout(35000)
           });
           if (layaRes.ok) {
             const data = await layaRes.json();
-            return json({
-              question: cleanQuestion,
-              answer: data.answer,
-              sentiment: data.sentiment,
-              noul: data.noul,
-              confidence: data.confidence,
-              probabilities: data.probabilities || {},
-              aphorismKey: data.aphorismKey || "signs_yes",
-              latency: Date.now() - startTime,
-              cost: 0,
-              usage: { prompt_tokens: data.raw?.usage?.input_tokens ?? 38, completion_tokens: 0 },
-              model: data.model || "convaiinnovations/laya-typed-decisions",
-              engine: "Laya System 1 (Tablet via Tunnel)",
-              tablet: true,
-              raw: data
-            });
+            if (data && data.answer) {
+              return json({
+                question: cleanQuestion,
+                answer: data.answer,
+                sentiment: data.sentiment,
+                noul: data.noul,
+                confidence: data.confidence,
+                probabilities: data.probabilities || {},
+                aphorismKey: data.aphorismKey || "signs_yes",
+                latency: Date.now() - startTime,
+                cost: 0,
+                usage: { prompt_tokens: data.raw?.usage?.input_tokens ?? 38, completion_tokens: 0 },
+                model: data.model || "convaiinnovations/laya-typed-decisions",
+                engine: "Laya System 1 (Android Tablet)",
+                tablet: true,
+                raw: data
+              });
+            }
           }
         } catch (layaErr) {
-          // Fall back to OpenRouter
+          // Fall back to OpenRouter Jev
         }
+      }
+
+      // 2. Fallback Engine: OpenRouter Jev
+      const apiKey = resolveApiKey(env);
+      if (!apiKey) {
+        return json({ error: "Oracle is not configured. Set the OPENROUTER_API_KEY secret." }, 503);
       }
 
       try {

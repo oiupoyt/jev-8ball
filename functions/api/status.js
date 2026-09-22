@@ -7,15 +7,14 @@ export async function onRequestGet(context) {
   let layaOnline = false;
   let layaData = null;
 
-  if (env.LAYA_API_URL) {
-    try {
-      const res = await fetch(`${env.LAYA_API_URL}/api/status`, { signal: AbortSignal.timeout(1500) });
-      if (res.ok) {
-        layaData = await res.json();
-        layaOnline = true;
-      }
-    } catch (e) {}
-  }
+  const layaUrl = env.LAYA_API_URL || "https://laya-api.oiupoyt.space";
+  try {
+    const res = await fetch(`${layaUrl}/api/status`, { signal: AbortSignal.timeout(2500) });
+    if (res.ok) {
+      layaData = await res.json();
+      layaOnline = Boolean(layaData.status === "online" || layaData.ready);
+    }
+  } catch (e) {}
 
   return new Response(JSON.stringify({
     status: "online",
