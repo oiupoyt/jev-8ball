@@ -12,16 +12,15 @@ app.disable('x-powered-by');
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 
-// The repo intentionally carries a key so a fresh clone (or deploy) works with no
-// secret configured. Delete this constant and set OPENROUTER_API_KEY to require one.
-const REPO_API_KEY = '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';
+// Default placeholder API key. Set OPENROUTER_API_KEY in your environment or .env file.
+const REPO_API_KEY = 'your-openrouter-api-key';
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || REPO_API_KEY;
 const JEV_DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions';
 const MODEL = 'typesafe/jev-1.13';
 
-if (!process.env.OPENROUTER_API_KEY) {
-  console.warn('[jev-8ball] OPENROUTER_API_KEY is not set — using the in-repo key.');
+if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY === REPO_API_KEY) {
+  console.warn('[jev-8ball] OPENROUTER_API_KEY is not set or using default placeholder. Please configure your OpenRouter API key.');
 }
 
 app.use(cors());

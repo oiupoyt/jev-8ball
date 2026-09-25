@@ -27,24 +27,31 @@ Runs by default on `http://localhost:3000`.
 
 ## configuration
 
-The repo intentionally bundles an OpenRouter key (`REPO_API_KEY` in `server.js`, `worker.mjs` and
-`functions/api/ask.js`) so a fresh clone or a deploy works with nothing configured. Export
-`OPENROUTER_API_KEY` to override it — `GET /api/status` reports which key is live via `keySource`.
+jev8ball connects to OpenRouter to query the `typesafe/jev-1.13` decision oracle.
 
-```env
-PORT=3000
-OPENROUTER_API_KEY=sk-or-v1-...
-```
-
-Delete the `REPO_API_KEY` constants to require a configured key instead. For Cloudflare, store the
-override as a secret rather than a plain variable:
+1. Obtain an API key from [OpenRouter](https://openrouter.ai/keys).
+2. Configure your key via environment variables:
 
 ```bash
-wrangler secret put OPENROUTER_API_KEY
+# Local development: copy example env and set your key
+cp .env.example .env
+# Edit .env and set:
+OPENROUTER_API_KEY=sk-or-v1-your-key-here
 ```
 
-> The bundled key is readable by anyone who can read this repository, so treat it as public and
-> rotate or remove it before the repo is shared.
+```bash
+# Or export directly in shell
+export OPENROUTER_API_KEY="sk-or-v1-your-key-here"
+```
+
+For Cloudflare Pages / Workers deployment:
+- **Cloudflare Pages**: Add `OPENROUTER_API_KEY` under **Settings > Environment Variables** in the Pages dashboard.
+- **Cloudflare Workers**: Store it as an encrypted secret using Wrangler:
+```bash
+npx wrangler secret put OPENROUTER_API_KEY
+```
+
+> If no key is set or the default placeholder `your-openrouter-api-key` is left unchanged, jev8ball gracefully falls back to an offline deterministic oracle mode.
 
 ## endpoints
 

@@ -1,9 +1,8 @@
 const JEV_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
 const MODEL = "typesafe/jev-1.13";
 
-// The repo intentionally carries a key so the deployed Worker works with no secret
-// configured. Delete this constant and set the OPENROUTER_API_KEY secret to require one.
-const REPO_API_KEY = "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";
+// Default placeholder API key. Set OPENROUTER_API_KEY in environment or Cloudflare secrets.
+const REPO_API_KEY = "your-openrouter-api-key";
 
 function resolveApiKey(env) {
   return env.OPENROUTER_API_KEY || REPO_API_KEY || null;

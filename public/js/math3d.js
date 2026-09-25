@@ -219,6 +219,146 @@ export function affineFromThreePoints(p1, p2, p3) {
   return [a, b, c, d, s1[0] - a * x1 - c * y1, s1[1] - b * x1 - d * y1];
 }
 
+/* ─── quaternions ([x, y, z, w], same right-handed convention as the matrices) ─── */
+
+export function quatIdentity() {
+  return [0, 0, 0, 1];
+}
+
+export function quatFromAxisAngle(axis, rad) {
+  const n = normalize(axis);
+  const half = rad / 2;
+  const s = Math.sin(half);
+  return [n[0] * s, n[1] * s, n[2] * s, Math.cos(half)];
+}
+
+/** Returns a ∘ b (b applied first). */
+export function quatMul(a, b) {
+  const [ax, ay, az, aw] = a;
+  const [bx, by, bz, bw] = b;
+  return [
+    aw * bx + ax * bw + ay * bz - az * by,
+    aw * by - ax * bz + ay * bw + az * bx,
+    aw * bz + ax * by - ay * bx + az * bw,
+    aw * bw - ax * bx - ay * by - az * bz
+  ];
+}
+
+export function quatConjugate(q) {
+  return [-q[0], -q[1], -q[2], q[3]];
+}
+
+export function quatDot(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+}
+
+export function quatNormalize(q) {
+  const len = Math.hypot(q[0], q[1], q[2], q[3]);
+  return len === 0 ? quatIdentity() : [q[0] / len, q[1] / len, q[2] / len, q[3] / len];
+}
+
+/** Shortest-path spherical interpolation; falls back to a lerp when nearly parallel. */
+export function quatSlerp(a, b, t) {
+  let d = quatDot(a, b);
+  let target = b;
+  if (d < 0) {
+    target = [-b[0], -b[1], -b[2], -b[3]];
+    d = -d;
+  }
+  if (d > 0.9995) {
+    return quatNormalize([
+      a[0] + (target[0] - a[0]) * t,
+      a[1] + (target[1] - a[1]) * t,
+      a[2] + (target[2] - a[2]) * t,
+      a[3] + (target[3] - a[3]) * t
+    ]);
+  }
+  const theta = Math.acos(clamp(d, -1, 1));
+  const sinTheta = Math.sin(theta);
+  const wa = Math.sin((1 - t) * theta) / sinTheta;
+  const wb = Math.sin(t * theta) / sinTheta;
+  return quatNormalize([
+    a[0] * wa + target[0] * wb,
+    a[1] * wa + target[1] * wb,
+    a[2] * wa + target[2] * wb,
+    a[3] * wa + target[3] * wb
+  ]);
+}
+
+/**
+ * Shortest-path rotation taking `from` onto `to`: the axis (unit, world space) and the
+ * angle in [0, π]. `quatMul(quatFromAxisAngle(axis, angle), to)` reproduces `from`,
+ * which is what lets a spring unwind the remaining error without ever rewinding.
+ */
+export function quatError(from, to) {
+  // The rotation takes `to` onto `from`, so it can be *unwound*: pre-multiplying `to` by
+  // the returned axis/angle reproduces `from`, and driving the angle to zero lands on `to`.
+  let d = quatMul(from, quatConjugate(to));
+  if (d[3] < 0) d = [-d[0], -d[1], -d[2], -d[3]];
+  const v = [d[0], d[1], d[2]];
+  const sin = Math.hypot(v[0], v[1], v[2]);
+  return {
+    axis: sin < 1e-9 ? [0, 1, 0] : [v[0] / sin, v[1] / sin, v[2] / sin],
+    angle: 2 * Math.atan2(sin, d[3])
+  };
+}
+
+/** Integrates a freely spinning body one step: q' = normalize(q + ½ ω q dt). */
+export function quatIntegrate(q, omega, dt) {
+  const spin = [omega[0] * 0.5 * dt, omega[1] * 0.5 * dt, omega[2] * 0.5 * dt, 0];
+  const dq = quatMul(spin, q);
+  return quatNormalize([q[0] + dq[0], q[1] + dq[1], q[2] + dq[2], q[3] + dq[3]]);
+}
+
+/** Rotates a direction by a unit quaternion. */
+export function quatRotate(q, v) {
+  const qv = [q[0], q[1], q[2]];
+  const t = mulScalar(cross(qv, v), 2);
+  return add(add(v, mulScalar(t, q[3])), cross(qv, t));
+}
+
+/** Column-major Float32Array(16) for a unit quaternion. */
+export function mat4FromQuat(q) {
+  const [x, y, z, w] = q;
+  const m = mat4Identity();
+  m[0] = 1 - 2 * (y * y + z * z);
+  m[1] = 2 * (x * y + z * w);
+  m[2] = 2 * (x * z - y * w);
+  m[4] = 2 * (x * y - z * w);
+  m[5] = 1 - 2 * (x * x + z * z);
+  m[6] = 2 * (y * z + x * w);
+  m[8] = 2 * (x * z + y * w);
+  m[9] = 2 * (y * z - x * w);
+  m[10] = 1 - 2 * (x * x + y * y);
+  return m;
+}
+
+/** Integration quantum for `oscillatorStep`: exact for frame times that are multiples of it. */
+export const OSCILLATOR_SUBSTEP = 1 / 240;
+
+/**
+ * One step of a damped harmonic oscillator, integrated with fixed sub-steps so the result
+ * does not depend on the frame time and cannot blow up on a slow frame (the explicit
+ * scheme is only stable while ω·h stays well below 2).
+ *
+ * @param {{x: number, v: number}} state position and velocity
+ * @param {number} dt frame time in seconds
+ * @param {number} omega undamped angular frequency (rad/s)
+ * @param {number} zeta damping ratio (1 = critically damped, < 1 overshoots)
+ */
+export function oscillatorStep(state, dt, omega, zeta, substep = OSCILLATOR_SUBSTEP) {
+  let { x, v } = state;
+  let remaining = dt;
+  while (remaining > 1e-9) {
+    const h = Math.min(substep, remaining);
+    remaining -= h;
+    const accel = -omega * omega * x - 2 * zeta * omega * v;
+    v += accel * h;
+    x += v * h;
+  }
+  return { x, v };
+}
+
 /** Mixes two [r, g, b] colours (0..255) by t. */
 export function mixRgb(from, to, t) {
   return [

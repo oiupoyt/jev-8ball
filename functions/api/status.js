@@ -1,6 +1,5 @@
-// Mirrors worker.mjs: the repo carries a key so a deploy works with no secret set.
-// Delete this constant and set OPENROUTER_API_KEY to require configuration.
-const REPO_API_KEY = "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";
+// Default placeholder API key. Set OPENROUTER_API_KEY in environment or Cloudflare secrets.
+const REPO_API_KEY = "your-openrouter-api-key";
 
 export async function onRequestGet(context) {
   const { env } = context;

@@ -16,6 +16,7 @@ import {
   dot,
   hexToRgb,
   lerp,
+  mat4FromQuat,
   mat4LookAt,
   mat4Mul,
   mat4Perspective,
@@ -25,7 +26,14 @@ import {
   mat4Translate,
   mixRgb,
   normalize,
+  oscillatorStep,
   projectToScreen,
+  quatError,
+  quatFromAxisAngle,
+  quatIdentity,
+  quatIntegrate,
+  quatMul,
+  quatRotate,
   rgbCss,
   smoothstep,
   transformDir,
@@ -35,13 +43,36 @@ import { createPlate, createVessel } from './meshes.js';
 
 const TAU = Math.PI * 2;
 const LIGHT = normalize([-0.42, 0.7, 0.86]);
-const VIEW = [0, 0, 1];
+
+/**
+ * Three-quarter camera. A dead-on view of a shallow prism is a flat silhouette; looking
+ * in from the side and slightly above keeps the bevelled rim, the tapered walls and the
+ * recessed chamber legible as depth.
+ */
+export const CAMERA = {
+  eye: [1.02, 0.66, 3.92],
+  target: [0, 0.02, 0],
+  fov: 36,
+  near: 0.1,
+  far: 40
+};
+
+/** Direction from the scene toward the camera: facing tests, rim light and specular. */
+const VIEW = normalize([
+  CAMERA.eye[0] - CAMERA.target[0],
+  CAMERA.eye[1] - CAMERA.target[1],
+  CAMERA.eye[2] - CAMERA.target[2]
+]);
 
 const BODY_BASE = hexToRgb('#191919');
 const BODY_EDGE = hexToRgb('#2b2b30');
 const CHAMBER_RGB = hexToRgb('#07070b');
 const PLATE_BASE = hexToRgb('#1b1b1f');
 const SPECULAR = [236, 245, 255];
+const FOG_RGB = hexToRgb('#0b0b0b');
+
+/** Depth haze: the back of the shell must sink into the page, not sit on top of it. */
+const FOG = { near: 3.55, far: 4.62, max: 0.3 };
 
 const TONES = {
   affirmative: hexToRgb('#10b981'),
@@ -56,6 +87,74 @@ const TONES = {
 const LIGHT_NEAR = normalize([LIGHT[0] - 0.35, LIGHT[1] + 0.32, LIGHT[2]]);
 const LIGHT_FAR = normalize([LIGHT[0] + 0.32, LIGHT[1] - 0.36, LIGHT[2]]);
 const FONT_STACK = "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+
+/**
+ * Die spin while the vessel is being shaken: a constant-speed tumble would look
+ * mechanical, so the angular velocity starts fast, decays with drag, and its axis slowly
+ * precesses — a body tumbling with angular momentum rather than an Euler loop.
+ */
+const SPIN = {
+  speed: 9.5,
+  spread: 3.6,
+  drag: 1.35,
+  precess: 0.85,
+  precessAxis: [0.25, 0.15, 1]
+};
+
+/**
+ * Die spring that unwinds the tumble onto the answer face. The error is expressed as a
+ * single angle about the shortest-path axis, so the die sweeps forward into the answer
+ * and bounces once (ζ < 1) — it can never rewind like the old linear unwind did.
+ */
+const SETTLE = {
+  omega: 10.5,
+  zeta: 0.68,
+  minRate: 2.5,
+  maxRate: 6.5,
+  landAngle: 0.16,
+  restAngle: 0.02
+};
+
+/** Hull rattle. Two incommensurate frequencies per channel stop it looking metronomic. */
+const SHAKE = {
+  attack: 0.055,
+  decay: 5.5,
+  x: [{ hz: 6.7, amp: 0.03 }, { hz: 10.9, amp: 0.013 }],
+  y: [{ hz: 5.3, amp: 0.042 }, { hz: 8.9, amp: 0.017 }],
+  yaw: [{ hz: 4.1, amp: 0.04 }, { hz: 7.7, amp: 0.015 }],
+  pitch: [{ hz: 4.9, amp: 0.048 }, { hz: 8.3, amp: 0.018 }],
+  roll: [{ hz: 3.7, amp: 0.055 }, { hz: 6.1, amp: 0.021 }]
+};
+
+const PLATE_SPRING = { omega: 24, zeta: 0.5 };
+const SURFACE_SPRING = { omega: 12, zeta: 0.2 };
+const THUMP_SPRING = { omega: 17, zeta: 0.18 };
+/** How hard the vessel's vertical motion throws the liquid surface around. */
+const SURFACE_COUPLING = 14;
+
+/** Deterministic [0,1) noise so every roll tumbles differently but reproducibly. */
+function seededUnit(seed) {
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+/** Drives a position/velocity pair toward a moving target with a spring-damper. */
+export function springToward(state, target, dt, { omega, zeta }) {
+  const step = oscillatorStep({ x: state.x - target, v: state.v }, dt, omega, zeta);
+  return { x: target + step.x, v: step.v };
+}
+
+/**
+ * Sum of incommensurate sines — a rattle that never repeats on a short cycle. The caller
+ * scales it by a continuously varying envelope, so it stays smooth through every phase
+ * change.
+ */
+function rattle(clock, channels) {
+  let sum = 0;
+  for (const { hz, amp } of channels) sum += Math.sin(TAU * hz * clock + hz) * amp;
+  return sum;
+}
+
 
 /** Phases: rolling -> (answer arrives) -> revealing -> ready -> idle. */
 export class OracleBall {
@@ -81,17 +180,32 @@ export class OracleBall {
     this.revealStart = 0;
     this.holdTime = 0;
     this.rollDuration = 1.25;
-    this.revealDuration = 0.9;
+    this.revealDuration = 1.1;
+    this.rollProgress = 0;
+    this.rollCount = 0;
 
     this.answerLines = ['CONCENTRATE', '& ASK'];
     this.tone = 'idle';
     this.pendingAnswer = null;
+    this.answerAlpha = 1;
 
     this.pointer = { x: 0, y: 0 };
     this.tilt = { x: 0, y: 0 };
-    this.shake = 0;
     this.glow = 0;
     this.resolveRoll = null;
+
+    // Die: a free tumble that a spring later unwinds onto the answer face.
+    this.plateQuat = quatIdentity();
+    this.spin = { q: quatIdentity(), w: [0, 0, 0] };
+    this.settle = null;
+    this.landed = true;
+    this.plateY = { x: 0.02, v: 0 };
+
+    // Hull rattle, impact bounce and the chamber liquid, all spring-driven.
+    this.shakeEnergy = 0;
+    this.hull = { x: 0, y: 0, yaw: 0, pitch: 0, roll: 0 };
+    this.thump = { x: 0, v: 0 };
+    this.surface = { x: 0, v: 0 };
   }
 
   /* ─── public API ─── */
@@ -127,8 +241,26 @@ export class OracleBall {
     this.phase = 'rolling';
     this.rollStart = this.clock;
     this.holdTime = 0;
+    this.rollProgress = 0;
     this.glow = 0;
     this.answerLines = null;
+    this.answerAlpha = 0;
+    this.settle = null;
+    this.landed = false;
+    this.rollCount += 1;
+
+    // Kick the die into a fresh tumble: fast, off-axis, and never quite the same twice.
+    const seed = this.rollCount * 7.13;
+    const axis = normalize([
+      0.7 + seededUnit(seed) * 0.6,
+      0.4 + seededUnit(seed + 1.7) * 0.7,
+      0.15 + seededUnit(seed + 3.1) * 0.45
+    ]);
+    const speed = SPIN.speed + seededUnit(seed + 5.3) * SPIN.spread;
+    this.spin.q = this.plateQuat;
+    this.spin.w = [axis[0] * speed, axis[1] * speed, axis[2] * speed];
+    this.shakeEnergy = 0;
+
     return new Promise((resolve) => {
       // Backstop so a paused render loop (hidden tab, off-screen canvas) can never
       // leave the caller waiting forever.
@@ -149,8 +281,9 @@ export class OracleBall {
     this.answerLines = lines;
     this.tone = tone;
     this.revealStart = this.clock;
-    this.tumbleAtReveal = this.platePose ? { ...this.platePose } : { rx: 0, ry: 0, rz: 0, y: -0.5 };
+    this.landed = false;
     this.phase = 'revealing';
+    this._beginSettle();
   }
 
   /** Returns the vessel to the resting state and clears the verdict. */
@@ -160,6 +293,11 @@ export class OracleBall {
     this.phase = 'idle';
     this.glow = 0;
     this.pendingAnswer = null;
+    this.settle = null;
+    this.landed = true;
+    this.answerAlpha = 1;
+    this.plateQuat = quatIdentity();
+    this.spin.w = [0, 0, 0];
   }
 
   /* ─── wiring ─── */
@@ -221,18 +359,49 @@ export class OracleBall {
   };
 
   _update(dt) {
+    const rm = this.reducedMotion;
     const ease = Math.min(1, dt * 6);
-    this.tilt.x += ((this.reducedMotion ? 0 : this.pointer.y * 0.2) - this.tilt.x) * ease;
-    this.tilt.y += ((this.reducedMotion ? 0 : this.pointer.x * 0.3) - this.tilt.y) * ease;
+    this.tilt.x += ((rm ? 0 : this.pointer.y * 0.24) - this.tilt.x) * ease;
+    this.tilt.y += ((rm ? 0 : this.pointer.x * 0.34) - this.tilt.y) * ease;
 
     const elapsed = this.clock - this.rollStart;
 
+    // ─── hull rattle ───
+    // One continuously varying envelope drives every channel, so the shake can start and
+    // stop with the phase machine without ever teleporting the vessel.
+    if (this.phase === 'rolling' && !rm) {
+      this.shakeEnergy = Math.min(1, this.shakeEnergy + dt / SHAKE.attack);
+    } else {
+      this.shakeEnergy *= Math.exp(-dt * SHAKE.decay);
+      if (this.shakeEnergy < 1e-4) this.shakeEnergy = 0;
+    }
+    const energy = this.shakeEnergy;
+    this.hull = {
+      x: rattle(this.clock, SHAKE.x) * energy,
+      y: rattle(this.clock, SHAKE.y) * energy,
+      yaw: rattle(this.clock, SHAKE.yaw) * energy,
+      pitch: rattle(this.clock, SHAKE.pitch) * energy,
+      roll: rattle(this.clock, SHAKE.roll) * energy
+    };
+    this.thump = oscillatorStep(this.thump, dt, THUMP_SPRING.omega, THUMP_SPRING.zeta);
+
+    let targetY = 0.02;
+
     if (this.phase === 'rolling') {
-      this.rollProgress = this.reducedMotion ? 1 : clamp(elapsed / this.rollDuration, 0, 1);
-      this.shake = this.reducedMotion
-        ? 0
-        : (1 - this.rollProgress * 0.6) * Math.sin(elapsed * 24) * 0.42;
-      this.liquidSlosh = this.reducedMotion ? 0 : 1;
+      this.rollProgress = rm ? 1 : clamp(elapsed / this.rollDuration, 0, 1);
+      if (rm) {
+        this.plateQuat = quatFromAxisAngle([0.6, 0.75, 0.25], 0.5);
+      } else {
+        // Angular momentum: the spin decays with drag while its axis precesses, which is
+        // what separates a tumbling body from a constant-speed Euler loop.
+        const drag = Math.exp(-SPIN.drag * dt);
+        this.spin.w = quatRotate(
+          quatFromAxisAngle(SPIN.precessAxis, SPIN.precess * dt),
+          [this.spin.w[0] * drag, this.spin.w[1] * drag, this.spin.w[2] * drag]
+        );
+        this.spin.q = quatIntegrate(this.spin.q, this.spin.w, dt);
+        this.plateQuat = this.spin.q;
+      }
       if (elapsed >= this.rollDuration) {
         this.holdTime += dt;
         if (this.resolveRoll) {
@@ -241,51 +410,87 @@ export class OracleBall {
           resolve();
         }
       }
-      this.platePose = this._tumblePose(elapsed);
+      targetY = -0.3 + 0.07 * energy * Math.sin(TAU * 5.1 * this.clock);
       this.answerAlpha = 0;
-      this.glow = this.reducedMotion ? 0 : 0.12 + Math.sin(elapsed * 9) * 0.06;
+      this.glow = rm ? 0.1 : 0.1 + energy * 0.07;
     } else if (this.phase === 'revealing') {
-      const t = this.reducedMotion ? 1 : clamp((this.clock - this.revealStart) / this.revealDuration, 0, 1);
-      const settle = smoothstep(0, 0.72, t);
-      const from = this.tumbleAtReveal || { rx: 0, ry: 0, rz: 0, y: -0.5 };
-      // Unwind the tumble to zero so the plate always lands face-on to the camera.
-      this.platePose = {
-        rx: from.rx * (1 - settle),
-        ry: from.ry * (1 - settle),
-        rz: from.rz * (1 - settle),
-        y: lerp(from.y, 0.06, settle)
-      };
-      this.shake = this.reducedMotion ? 0 : (1 - t) * Math.sin(t * 18) * 0.12;
-      this.liquidSlosh = this.reducedMotion ? 0 : 1 - t;
-      this.answerAlpha = smoothstep(0.5, 1, t);
-      this.glow = Math.sin(t * Math.PI) * 1.1 + 0.16;
-      if (t >= 1) this.phase = 'ready';
+      if (!this.settle) this._beginSettle();
+      if (rm) this.settle.angle = { x: 0, v: 0 };
+      this.settle.angle = oscillatorStep(this.settle.angle, dt, SETTLE.omega, SETTLE.zeta);
+      this.plateQuat = quatMul(
+        quatFromAxisAngle(this.settle.axis, this.settle.angle.x),
+        this.settle.target
+      );
+
+      // The spring unwinds the whole error along the shortest path, so the die sweeps
+      // *into* the answer and rocks once past it — never rewinding the tumble.
+      const remaining = Math.abs(this.settle.angle.x);
+      if (!this.landed && remaining <= SETTLE.landAngle) {
+        this.landed = true;
+        this.thump.v -= rm ? 2 : 7.5; // the hull takes the impact…
+        this.plateY.v -= 1; // …and the die sinks into the liquid
+        this.surface.v += 2.4;
+        this.glow = Math.max(this.glow, 0.9);
+      }
+      // The ink fades in as the face turns toward the camera, and is latched so the small
+      // overshoot of the settle can never make the verdict flicker.
+      this.answerAlpha = Math.max(
+        this.answerAlpha,
+        smoothstep(SETTLE.landAngle * 3, SETTLE.restAngle * 3.5, remaining)
+      );
+      targetY = 0.06;
+      const settled =
+        remaining <= SETTLE.restAngle && Math.abs(this.settle.angle.v) <= 0.25;
+      if (settled || this.clock - this.revealStart > this.revealDuration * 2) {
+        this.phase = 'ready';
+      }
     } else {
-      const bob = this.reducedMotion ? 0 : Math.sin(this.clock * 1.15) * 0.022;
-      this.platePose = {
-        rx: this.reducedMotion ? 0 : Math.sin(this.clock * 0.42) * 0.06,
-        ry: this.reducedMotion ? 0 : Math.sin(this.clock * 0.55) * 0.24,
-        rz: this.reducedMotion ? 0 : Math.sin(this.clock * 0.37) * 0.05,
-        y: 0.02 + bob
-      };
-      this.liquidSlosh = this.reducedMotion ? 0 : 0.25;
+      // ready / idle: square to the camera with only a whisper of movement, so the verdict
+      // stays readable instead of rocking under the reader's eye.
+      const wobble = rm ? 0 : 1;
+      this.plateQuat = quatMul(
+        quatFromAxisAngle([0, 1, 0], Math.sin(this.clock * 0.62) * 0.03 * wobble),
+        quatFromAxisAngle([1, 0, 0], Math.sin(this.clock * 0.47) * 0.024 * wobble)
+      );
+      const bob = rm ? 0 : Math.sin(this.clock * 1.15) * 0.022;
+      targetY = 0.02 + bob;
       this.answerAlpha = this.answerLines ? 1 : 0;
       this.glow = this.phase === 'ready' ? 0.16 + Math.sin(this.clock * 1.6) * 0.04 : 0.06;
     }
+
+    this.plateY = springToward(this.plateY, targetY, dt, PLATE_SPRING);
+
+    // ─── chamber liquid ───
+    // The surface is an oscillator kicked by the vessel's own vertical motion, so it
+    // sloshes while the oracle is shaken, splashes when the die lands and settles still —
+    // instead of the old sine that wobbled forever.
+    const hullY = this.hull.y + this.thump.x;
+    const hullFall = this.prevHullY === undefined ? 0 : hullY - this.prevHullY;
+    this.prevHullY = hullY;
+    this.surface.v -= hullFall * SURFACE_COUPLING;
+    this.surface = oscillatorStep(this.surface, dt, SURFACE_SPRING.omega, SURFACE_SPRING.zeta);
   }
 
-  /** Churning pose used while the vessel is being shaken. */
-  _tumblePose(elapsed) {
-    const dive = smoothstep(0, this.rollDuration * 0.85, elapsed);
-    if (this.reducedMotion) {
-      return { rx: 0.5, ry: 0.6, rz: 0.2, y: lerp(0.02, -0.24, dive) };
-    }
-    return {
-      rx: elapsed * 5.2,
-      ry: elapsed * 3.05,
-      rz: elapsed * 2.15,
-      y: lerp(0.02, -0.5, dive)
+  /**
+   * Captures the tumble's remaining error as one angle about its shortest-path axis, and
+   * hands the spring the die's current spin so the settle starts without a jolt.
+   */
+  _beginSettle(from = this.spin.q) {
+    const error = quatError(from, quatIdentity());
+    // Only the spin component *about the settle axis* carries into the unwind; the rest of
+    // the tumble's momentum is orthogonal and must not be added as fake approach speed. The
+    // ceiling keeps a fast tumble from snapping the die round in a couple of frames.
+    const rate = clamp(
+      dot(this.spin.w, error.axis),
+      SETTLE.minRate,
+      SETTLE.maxRate
+    );
+    this.settle = {
+      axis: error.axis,
+      angle: { x: error.angle, v: -rate },
+      target: quatIdentity()
     };
+    this.plateQuat = from;
   }
 
   get toneRgb() {
@@ -303,24 +508,29 @@ export class OracleBall {
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
-    // Camera sits far enough that the vessel fills ~72% of the canvas height,
-    // leaving room for the shake, the rim glow, and the cast shadow.
-    const view = mat4LookAt([0, 0, 4.3], [0, 0, 0], [0, 1, 0]);
-    const proj = mat4Perspective((36 * Math.PI) / 180, 1, 0.1, 40);
+    // The camera frames the vessel at ~72% of the canvas height, leaving room for the
+    // rattle, the rim glow and the cast shadow.
+    const view = mat4LookAt(CAMERA.eye, CAMERA.target, [0, 1, 0]);
+    const proj = mat4Perspective((CAMERA.fov * Math.PI) / 180, 1, CAMERA.near, CAMERA.far);
     this.viewProj = mat4Mul(proj, view);
 
-    const pose = this.platePose || { rx: 0, ry: 0, rz: 0, y: 0.02 };
-    const shakeZ = this.shake * 0.5;
-    const vesselModel = mat4Mul(
-      mat4RotateZ(shakeZ),
+    // Hull: pointer parallax plus the rattle, with the impact bounce folded into y.
+    const hullRot = mat4Mul(
+      mat4RotateZ(this.hull.roll),
       mat4Mul(
-        mat4RotateY(this.tilt.y + this.shake * 0.28),
-        mat4RotateX(this.tilt.x + Math.cos(this.clock * 9) * this.shake * 0.22)
+        mat4RotateY(this.tilt.y + this.hull.yaw),
+        mat4RotateX(this.tilt.x + this.hull.pitch)
       )
     );
+    const vesselModel = mat4Mul(
+      mat4Translate(this.hull.x, this.hull.y + this.thump.x, 0),
+      hullRot
+    );
+    // The die rides inside the hull, so parallax and shake carry it along instead of
+    // letting it look pasted onto the screen.
     const plateModel = mat4Mul(
-      mat4Translate(0, pose.y, 0),
-      mat4Mul(mat4RotateZ(pose.rz), mat4Mul(mat4RotateY(pose.ry), mat4RotateX(pose.rx)))
+      hullRot,
+      mat4Mul(mat4Translate(0, this.plateY.x, 0), mat4FromQuat(this.plateQuat))
     );
 
     this._drawGroundGlow(w, h);
@@ -335,9 +545,9 @@ export class OracleBall {
 
     const tone = this.toneRgb;
 
-    // 1. shell behind the chamber: back cap first, then the side facets
+    // 1. shell behind the chamber: the back cap, then the tapered side walls
     for (const face of vessel.faces) {
-      if (face.kind === 'ring') continue;
+      if (face.kind === 'ring' || face.kind === 'bevel') continue;
       const base = face.kind === 'back' ? CHAMBER_RGB : BODY_BASE;
       this._fillFace(face, this._faceStyle(face, base, tone, face.kind === 'back' ? 0.05 : 0.55));
     }
@@ -352,16 +562,18 @@ export class OracleBall {
         this._fillFace(face, this._faceStyle(face, base, tone, face.kind === 'answer' ? 0.35 : 0.8));
       }
       if (this.answerLines && this.answerAlpha > 0.01) {
-        this._drawAnswerText(plate, windowPoly);
+        this._drawAnswerText(plate);
       }
       this._overlayLiquid(liquid, tone);
       ctx.restore();
     }
 
-    // 3. the front frame, nearest to the camera, drawn last
+    // 3. the front of the shell, drawn last: the forward-facing bevel carries the key
+    //    light and the flat collar sits just behind it.
     for (const face of vessel.faces) {
-      if (face.kind !== 'ring') continue;
-      this._fillFace(face, this._faceStyle(face, BODY_EDGE, tone, 0.5));
+      if (face.kind !== 'ring' && face.kind !== 'bevel') continue;
+      const base = face.kind === 'bevel' ? BODY_EDGE : BODY_BASE;
+      this._fillFace(face, this._faceStyle(face, base, tone, face.kind === 'bevel' ? 0.3 : 0.5));
     }
 
     if (windowPoly) this._strokeWindow(windowPoly, tone);
@@ -408,9 +620,10 @@ export class OracleBall {
   _liquidGeometry(vesselModel, windowPoly) {
     const mvp = mat4Mul(this.viewProj, vesselModel);
     const { radius, z } = this.vessel.window;
-    const slosh = this.liquidSlosh || 0;
-    const level = -0.09 + Math.sin(this.clock * 8.5) * 0.05 * slosh;
-    const tilt = Math.sin(this.clock * 6.3) * 0.16 * slosh;
+    // Level and tilt come from the slosh oscillator, so the surface rings down to a still
+    // mirror once the oracle settles instead of waving forever.
+    const level = -0.075 + this.surface.x;
+    const tilt = clamp(this.surface.v * 0.03, -0.2, 0.2);
     const left = projectToScreen(
       transformPoint(mvp, [-radius * 1.35, level + tilt, z * 0.2]),
       this.width,
@@ -441,13 +654,16 @@ export class OracleBall {
 
   _drawContactShadow(w, h) {
     const { ctx } = this;
-    const lift = (this.platePose ? 0 : 0) + 0.02;
+    // The shadow stays anchored while the hull rattles above it, which is what sells the
+    // vessel as a solid body in front of a surface rather than a flat image being nudged.
+    const spread = 1 + this.shakeEnergy * 0.22;
+    const opacity = 0.6 - this.shakeEnergy * 0.16;
     ctx.save();
-    ctx.translate(w / 2, h * 0.5 + h * 0.4 + lift);
+    ctx.translate(w / 2, h * 0.5 + h * 0.4);
     ctx.scale(1, 0.2);
-    const radius = w * 0.31;
+    const radius = w * 0.31 * spread;
     const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, radius);
-    gradient.addColorStop(0, 'rgba(0,0,0,0.6)');
+    gradient.addColorStop(0, `rgba(0,0,0,${opacity})`);
     gradient.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.beginPath();
     ctx.arc(0, 0, radius, 0, TAU);
@@ -458,28 +674,30 @@ export class OracleBall {
 
   /* ─── shading & paint helpers ─── */
 
-  /** Blinn-Phong-ish shade: ambient + Lambert, specular, and a verdict-tinted rim. */
-  _shade(base, normal, light, tone, rimStrength) {
+  /** Blinn-Phong-ish shade: ambient + Lambert, specular, a verdict rim and depth haze. */
+  _shade(base, normal, light, tone, rimStrength, fog = 0) {
     const diffuse = Math.max(0, dot(normal, light));
-    const half = normalize([light[0], light[1], light[2] + 1]);
-    const spec = Math.pow(Math.max(0, dot(normal, half)), 40) * 0.5;
+    const half = normalize([light[0] + VIEW[0], light[1] + VIEW[1], light[2] + VIEW[2]]);
+    const spec = Math.pow(Math.max(0, dot(normal, half)), 42) * 0.55;
     const rim = Math.pow(1 - clamp(dot(normal, VIEW), 0, 1), 3) * rimStrength;
-    const lit = 0.13 + diffuse * 0.95;
+    const lit = 0.12 + diffuse * 0.95;
     const rgb = [
       base[0] * lit + SPECULAR[0] * spec,
       base[1] * lit + SPECULAR[1] * spec,
       base[2] * lit + SPECULAR[2] * spec
     ];
-    return mixRgb(rgb, tone, clamp(rim * 0.55, 0, 1));
+    const tinted = mixRgb(rgb, tone, clamp(rim * 0.55, 0, 1));
+    return fog > 0 ? mixRgb(tinted, FOG_RGB, fog) : tinted;
   }
 
   /** Solid fill for faceted faces, soft gradient for the large curved ones. */
   _faceStyle(face, base, tone, rimStrength) {
+    const fog = smoothstep(FOG.near, FOG.far, face.depth) * FOG.max;
     if (!face.smooth) {
-      return rgbCss(this._shade(base, face.normal, LIGHT, tone, rimStrength));
+      return rgbCss(this._shade(base, face.normal, LIGHT, tone, rimStrength, fog));
     }
-    const near = this._shade(base, face.normal, LIGHT_NEAR, tone, rimStrength);
-    const far = this._shade(base, face.normal, LIGHT_FAR, tone, rimStrength);
+    const near = this._shade(base, face.normal, LIGHT_NEAR, tone, rimStrength, fog);
+    const far = this._shade(base, face.normal, LIGHT_FAR, tone, rimStrength, fog);
     const bounds = boundsOf(face.points);
     const gradient = this.ctx.createLinearGradient(bounds.minX, bounds.minY, bounds.maxX, bounds.maxY);
     gradient.addColorStop(0, rgbCss(mixRgb(near, SPECULAR, 0.05)));
